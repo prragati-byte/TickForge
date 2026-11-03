@@ -78,6 +78,12 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 - `--max-qty 10000`: reject larger orders.
 - `--band-pct 20`: once a symbol has traded, reject prices more than 20% away from the last trade price. Before the first trade there is no band.
 
+### Thread placement
+
+- `--pin` (default): the matching thread runs on one core and every other thread is kept off it. The core is the last one this process may use (`taskset` and cgroup limits are respected). Its SMT sibling is kept free too, when at least 4 CPUs are available. With fewer than 2 CPUs, or on an OS other than Linux, the server runs unpinned.
+- `--no-pin`: leave placement to the scheduler.
+- `--pin-core N`: choose the matcher's core. A core this process may not use is a startup error (exit code 2).
+
 ### Rules
 
 - Price-time priority. A trade prints at the **resting** order's price. Partial fills leave the remainder resting.

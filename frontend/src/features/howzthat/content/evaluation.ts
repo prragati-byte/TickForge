@@ -58,8 +58,8 @@ export const EXPERIMENTS: Experiment[] = [
     variable: "Core affinity on/off.",
     metric: "P99 and P99.99 latency.",
     procedure: "Same load, with and without affinity, on an otherwise idle machine.",
-    interpretation: "Quantifies scheduler jitter on this machine.",
-    status: "blocked",
+    interpretation: "Quantifies scheduler jitter on this machine. Result: a small difference inside the run-to-run spread (docs/BENCHMARKS.md); on WSL2 the pin is to a virtual CPU.",
+    status: "first-run",
     needs: "Core affinity is not implemented.",
   },
   {
@@ -127,7 +127,7 @@ export const EVIDENCE: { title: string; result: string; how: string }[] = [
 // ---- 09 Limitations and future work --------------------------------------------------------------------
 
 export const LIMITATIONS = [
-  "The benchmarks are a first run on one machine with unpinned threads. The lock-free queue did not beat the mutex queue on raw throughput; only its enqueue P99 was lower at 4 and 8 producers.",
+  "The queue and book benchmarks are a first run on one machine with unpinned threads. The lock-free queue did not beat the mutex queue on raw throughput; only its enqueue P99 was lower at 4 and 8 producers.",
   "The engine log is not fsynced: it survives a killed process but not a power cut. No snapshots.",
   "The database has no per-table id index (get_trade scans), no Rust-side benchmarks, and compaction is not throttled by queue depth.",
   "Limit orders only: no market orders or modifications (cancel is supported).",

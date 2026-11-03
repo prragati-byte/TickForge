@@ -1,6 +1,7 @@
 // engine_server: the TickForge matching engine as a TCP server.
 //
 //   engine_server --port 9100 --wal data/engine.wal [--max-qty 10000] [--band-pct 20]
+//                 [--pin | --no-pin] [--pin-core N]
 //
 // Protocol: one JSON object per line (see docs/CONTRACTS.md, section 2).
 //
@@ -12,6 +13,7 @@
 //
 // The order books are MapBook (std::map). DenseBook is not used here because
 // it only accepts prices inside a fixed range.
+#include "affinity.hpp"
 #include "json_lite.hpp"
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
@@ -35,6 +37,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -82,6 +85,8 @@ struct Options {
   std::string wal_path;
   int64_t max_qty = 10000;
   int64_t band_pct = 20;
+  bool pin = true;   // pin the matching thread to one core (--no-pin turns it off)
+  int pin_core = -1; // -1: choose automatically
 };
 
 // ---- small helpers ----------------------------------------------------------
@@ -159,7 +164,8 @@ static ProcInfo read_proc() {
 
 class Server {
 public:
-  explicit Server(const Options &opt) : opt_(opt), start_ns_(now_ns()), win_start_ns_(start_ns_) {
+  explicit Server(const Options &opt, const tf_affinity::PinPlan &plan)
+      : opt_(opt), plan_(plan), start_ns_(now_ns()), win_start_ns_(start_ns_) {
     WalRecovery r = recover_exchange(opt_.wal_path, ex_);
     seq_ = r.last_seq;
     wal_ = std::make_unique<WalWriter>(opt_.wal_path);
@@ -182,7 +188,15 @@ public:
       return 1;
     }
 
-    std::thread matcher([this] { matcher_loop(); });
+    std::thread matcher([this] {
+#ifdef __linux__
+      pthread_setname_np(pthread_self(), "tf-matcher");
+#endif
+      if (plan_.matcher_core >= 0) tf_affinity::set_current_thread({plan_.matcher_core});
+      matcher_loop();
+    });
+    // Connection threads start from this thread, so they inherit this set.
+    if (plan_.matcher_core >= 0) tf_affinity::set_current_thread(plan_.others);
     std::fprintf(stderr, "engine: listening on 127.0.0.1:%d\n", opt_.port);
 
     while (!g_stop.load()) {
@@ -587,6 +601,7 @@ private:
   // ---- data ----
 
   Options opt_;
+  tf_affinity::PinPlan plan_;
   Exchange<MapBook> ex_;            // touched by the matching thread only (and recovery)
   std::unique_ptr<WalWriter> wal_;  // guarded by ingress_mu_
   uint64_t seq_ = 0;                // guarded by ingress_mu_
@@ -622,12 +637,24 @@ private:
 static bool parse_args(int argc, char **argv, Options &opt) {
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
+    if (a == "--pin") {
+      opt.pin = true;
+      continue;
+    }
+    if (a == "--no-pin") {
+      opt.pin = false;
+      continue;
+    }
     if (i + 1 >= argc) return false;
     std::string v = argv[++i];
     if (a == "--port") opt.port = std::atoi(v.c_str());
     else if (a == "--wal") opt.wal_path = v;
     else if (a == "--max-qty") opt.max_qty = std::atoll(v.c_str());
     else if (a == "--band-pct") opt.band_pct = std::atoll(v.c_str());
+    else if (a == "--pin-core") {
+      opt.pin = true;
+      opt.pin_core = std::atoi(v.c_str());
+    }
     else return false;
   }
   return !opt.wal_path.empty() && opt.port > 0 && opt.port < 65536 && opt.max_qty > 0 &&
@@ -639,14 +666,22 @@ int main(int argc, char **argv) {
   if (!parse_args(argc, argv, opt)) {
     std::fprintf(stderr,
                  "usage: engine_server --wal <file> [--port 9100] [--max-qty 10000] "
-                 "[--band-pct 20]\n");
+                 "[--band-pct 20] [--pin | --no-pin] [--pin-core N]\n");
     return 2;
   }
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
   std::signal(SIGPIPE, SIG_IGN);
   try {
-    Server server(opt);
+    tf_affinity::PinPlan plan;
+    if (opt.pin) {
+      plan = tf_affinity::make_plan(tf_affinity::allowed_cpus(), opt.pin_core, tf_affinity::smt_siblings);
+      std::fprintf(stderr, "engine: pinning: %s\n", plan.note.c_str());
+      // An explicit core that cannot be used is a mistake; the automatic choice
+      // just runs unpinned on a machine with too few CPUs.
+      if (opt.pin_core >= 0 && plan.matcher_core < 0) return 2;
+    }
+    Server server(opt, plan);
     return server.run();
   } catch (const std::exception &e) {
     std::fprintf(stderr, "engine: %s\n", e.what());

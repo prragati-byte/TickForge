@@ -50,3 +50,24 @@ Items per producer: 200000. One consumer thread. Latency is the time inside `enq
 | MapBook (std::map) | 10.12 | 114 | 402 | 822471 |
 | DenseBook (array) | 14.82 | 84 | 347 | 822471 |
 
+## Whole server, by engine flag
+
+Measured over TCP by `engine/bench/server_bench.cpp`. RTT is send to ack. The matcher columns are
+the server's own numbers, from queue push to matching finished; they show a backlog when the load is
+more than the matching thread can take.
+
+### Core pinning
+
+4 connections, 30000 orders per run, 15 runs per configuration, paced at 2000 orders/s in total. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| unpinned | 2000 | 1993 to 2000 | 183.8 | 1060.5 | 3667.1 | 58.5 | 1504.3 | 510 to 11118 |
+| pinned | 2000 | 1999 to 2000 | 183.2 | 948.5 | 3311.8 | 52.5 | 1234.3 | 545 to 3877 |
+
+4 connections, 200000 orders per run, 7 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run. The matcher columns here are a backlog of seconds, not latency: this load is more than the matching thread can take.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) |
+|---|---|---|---|---|---|---|---|
+| unpinned | 15358 | 14654 to 15642 | 219.4 | 1009.9 | 1582.2 | 2381441.4 | 3930215.8 |
+| pinned | 15711 | 14736 to 15978 | 214.2 | 986.9 | 1493.1 | 2330488.2 | 3849743.9 |

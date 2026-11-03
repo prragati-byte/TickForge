@@ -76,3 +76,12 @@ Both versions pass `queue_stress_test` under ThreadSanitizer and AddressSanitize
 - **Compaction merges neighbours only.** Tables are ordered by file number and newer wins. Merging two tables with an older one in between could bring back an old copy of a replaced trade. `compact()` therefore takes the longest run of adjacent tables whose sizes are within 4x of each other, writes the result over the newest input's file number, then deletes the others. The memtable also flushes by itself at 10,000 trades, and a flush that leaves 8 or more tables triggers a compaction.
 - **`get_trade` on an SSTable scans the data section** when the Bloom filter and the min/max id say "maybe", because the file is sorted by time, not by id. Misses (most lookups) never touch the disk. Planned: an id index per table.
 - **`count()`** is kept as a number: computed once at open (one pass over all tables), then +1 for every insert of a new id.
+
+## Core pinning
+
+- **On by default, `--no-pin` to disable.** The rule for this work was that a feature stays off unless it shows no regression. It passed: over 15 paced runs, matcher P99 was 1234 us pinned and 1504 us unpinned, with a tighter spread; closed-loop throughput and RTT were equal or slightly better.
+- **The gain is not established.** A shorter 5-run paced comparison went the other way (1470 us pinned, 766 us unpinned, ranges overlapping), and the matcher P99 spread between runs is larger than the difference. The honest reading is "no measured harm, no proven benefit on this machine". WSL2 pins to a virtual CPU, and Hyper-V still moves that between physical cores. A bare-metal run with `isolcpus` is what would test the hypothesis.
+- **Why the last CPU.** The kernel keeps most interrupts and housekeeping on the low-numbered CPUs. `--pin-core` overrides it.
+- **Only the matcher gets a core of its own.** Connection threads can be up to 100, so they share the remaining CPUs. They inherit that set from the main thread.
+- **Pinning is not isolation.** Without `isolcpus` the kernel can still schedule other processes on that core.
+- **Benchmark finding, separate from pinning.** At full closed-loop load (4 connections, about 15,000 orders/s) the matcher is the bottleneck: its P50 reaches about 2.4 s of queue backlog, because it sends each trade to every client from the matching thread. The RTT stays low because the ack is sent before matching. So `server_bench` has a paced mode, and the matcher columns only mean "latency" when the load is paced.

@@ -4,6 +4,8 @@
 #   ./build.sh          check tools, build everything, start the stack (Ctrl+C stops it)
 #   ./build.sh test     run every test suite
 #   ./build.sh bench    run the benchmarks and write docs/BENCHMARKS.md
+#   ./build.sh bench-mysql   TickForge database vs MySQL; writes docs/benchmarks/mysql.md
+#   ./build.sh kill9 [engine flags]   crash check: kill -9 the engine, compare state hashes
 #   ./build.sh clean    delete build output, .venv, node_modules and runtime data
 #
 # Linux and macOS (on Windows, use WSL2). Nothing here uses sudo or installs anything
@@ -212,7 +214,9 @@ run_stack() {
   trap 'exit 143' TERM
 
   say "Starting"
-  start engine "$ROOT" "$ENGINE_BUILD/engine_server" --port "$ENGINE_PORT" --wal "$DATA/engine.wal"
+  # TICKFORGE_ENGINE_FLAGS adds engine options, for example "--pin".
+  # shellcheck disable=SC2086
+  start engine "$ROOT" "$ENGINE_BUILD/engine_server" --port "$ENGINE_PORT" --wal "$DATA/engine.wal" ${TICKFORGE_ENGINE_FLAGS:-}
   wait_until engine "$LAST_PID" port_open "$ENGINE_PORT"
   echo "engine          127.0.0.1:$ENGINE_PORT"
 
@@ -301,10 +305,11 @@ do_bench() {
   local bin="$ENGINE_BUILD/engine_bench"
   [ -x "$bin" ] || fail "$bin was not built. The engine's CMake project must define an 'engine_bench' executable."
 
-  say "Running benchmarks (this can take a minute)"
+  say "Running benchmarks (this takes several minutes)"
   local out="$LOGS/bench-output.md"
   mkdir -p "$LOGS"
   "$bin" | tee "$out"
+  server_benchmarks | tee -a "$out"
 
   local file="$ROOT/docs/BENCHMARKS.md"
   {
@@ -329,8 +334,50 @@ do_bench() {
     echo "## Results"
     echo
     cat "$out"
+    if [ -f "$ROOT/docs/benchmarks/mysql.md" ]; then
+      echo
+      cat "$ROOT/docs/benchmarks/mysql.md"
+    fi
   } > "$file"
   echo "Wrote $file"
+}
+
+# Same server, different flags, same load. WAL files go on the real disk (.run), not /tmp.
+server_benchmarks() {
+  local dir="$RUN/bench" exe="$ENGINE_BUILD/engine_server"
+  mkdir -p "$dir"
+  local sb=("$ENGINE_BUILD/server_bench" --server "$exe" --dir "$dir")
+  echo "## Whole server, by engine flag"
+  echo
+  echo "Measured over TCP by \`engine/bench/server_bench.cpp\`. RTT is send to ack. The matcher columns are"
+  echo "the server's own numbers, from queue push to matching finished; they show a backlog when the load is"
+  echo "more than the matching thread can take."
+  echo
+  echo "### Core pinning"
+  echo
+  "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 15 --config "unpinned=--no-pin" --config "pinned=--pin"
+  echo
+  "${sb[@]}" --conns 4 --orders 200000 --runs 7 --config "unpinned=--no-pin" --config "pinned=--pin"
+  echo
+}
+
+# ---- MySQL baseline -------------------------------------------------------------------------------
+do_bench_mysql() {
+  check_tools
+  say "Building the MySQL baseline"
+  run_logged mysql-bench-build cargo build --release --manifest-path "$ROOT/bench/mysql_baseline/Cargo.toml" \
+    --target-dir "$RUN/build/mysql-bench"
+  say "Running it (about 15 minutes)"
+  python3 "$ROOT/bench/mysql_baseline/run.py"
+  echo "Run ./build.sh bench to include these results in docs/BENCHMARKS.md."
+}
+
+# ---- crash check ----------------------------------------------------------------------------------
+do_kill9() {
+  check_tools
+  build_engine Release
+  say "kill -9 recovery check"
+  python3 "$ROOT/engine/tools/kill9_check.py" "$ENGINE_BUILD/engine_server" "$RUN/kill9" "$@"
 }
 
 # ---- clean ----------------------------------------------------------------------------------------
@@ -354,7 +401,9 @@ case "${1:-run}" in
     ;;
   test) do_test ;;
   bench) do_bench ;;
+  bench-mysql) do_bench_mysql ;;
+  kill9) shift; do_kill9 "$@" ;;
   clean) do_clean ;;
-  -h | --help | help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) fail "unknown mode '$1'. Use: ./build.sh [test|bench|clean]" ;;
+  -h | --help | help) sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+  *) fail "unknown mode '$1'. Use: ./build.sh [test|bench|bench-mysql|kill9|clean]" ;;
 esac

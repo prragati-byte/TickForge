@@ -40,6 +40,10 @@ add_test(NAME queue_stress_test COMMAND queue_stress_test)
 add_executable(engine_e2e_test tests/engine_e2e_test.cpp)
 add_test(NAME engine_e2e_test COMMAND engine_e2e_test $<TARGET_FILE:engine_server>)
 
+# Core pinning: plan logic, then each thread's allowed CPUs read from /proc.
+add_executable(pinning_test tests/pinning_test.cpp)
+add_test(NAME pinning_test COMMAND pinning_test $<TARGET_FILE:engine_server>)
+
 # The same queue test again with ThreadSanitizer and AddressSanitizer.
 foreach(san thread address)
   add_executable(queue_stress_${san} tests/queue_stress_test.cpp)
@@ -54,3 +58,7 @@ add_executable(engine_bench bench/engine_bench.cpp)
 target_link_libraries(engine_bench PRIVATE Threads::Threads)
 target_compile_definitions(engine_bench PRIVATE
   "TF_BUILD_FLAGS=\"-std=c++17 ${CMAKE_CXX_FLAGS_RELEASE}\"")
+
+# Whole-server benchmark, used to compare engine flags under the same load.
+add_executable(server_bench bench/server_bench.cpp)
+target_link_libraries(server_bench PRIVATE Threads::Threads)

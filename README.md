@@ -23,6 +23,8 @@ That checks your tools (and prints the install command for anything missing), bu
 | `./build.sh` | build and run the whole stack |
 | `./build.sh test` | C++ tests, Rust tests, pytest for both services, frontend typecheck and tests |
 | `./build.sh bench` | run the benchmarks and write `docs/BENCHMARKS.md` |
+| `./build.sh bench-mysql` | TickForge database vs MySQL; writes `docs/benchmarks/mysql.md` |
+| `./build.sh kill9 [engine flags]` | crash check: send orders, `kill -9` the engine, restart it, compare state hashes |
 | `./build.sh clean` | delete build output, `.venv`, `node_modules` and runtime data (`.run/`) |
 
 Logs are in `.run/logs/`, data in `.run/data/`. Nothing is installed outside this folder, and the script never uses `sudo`.
@@ -55,10 +57,11 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | Dense-array order book (next to the `std::map` book) | built, verified, not used by the server | same random orders give identical trades and hash in `order_book_tests`; speed in `docs/BENCHMARKS.md` |
 | Rust LSM database (`tickforge_db`): memtable, SSTable with Bloom filter, compaction | built, verified | `cargo test` and `storage/tests/test_python.py` |
 | Engine benchmarks (lock-free vs mutex queue, dense vs map book) | built | `docs/BENCHMARKS.md`. On the test machine the mutex queue had higher raw throughput; read the table before drawing conclusions |
+| Core pinning (on by default, `--no-pin` to disable, `--pin-core N` to choose) | built, verified | `engine/tests/pinning_test.cpp` reads each thread's allowed CPUs from `/proc`. Pinned vs unpinned in `docs/BENCHMARKS.md`: no regression, and the gain is inside the run-to-run spread on this WSL2 machine |
 | Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |
-| Kernel bypass networking, io_uring, core pinning, elastic dual ring, multi-node replication | planned | |
+| Kernel bypass networking, io_uring, elastic dual ring, multi-node replication | planned | |
 
 ### Behavioural features
 
@@ -71,7 +74,7 @@ These follow the research document. They use real Yahoo price history, not forec
 
 ## Configuration
 
-Defaults work out of the box. See [.env.example](frontend/.env.example) for the frontend addresses. `exchange-api` reads `TICKFORGE_ENGINE_HOST`, `TICKFORGE_ENGINE_PORT`, `TICKFORGE_DATA_DIR` and (tests only) `TICKFORGE_MEMORY_DB`.
+Defaults work out of the box. See [.env.example](frontend/.env.example) for the frontend addresses. `exchange-api` reads `TICKFORGE_ENGINE_HOST`, `TICKFORGE_ENGINE_PORT`, `TICKFORGE_DATA_DIR` and (tests only) `TICKFORGE_MEMORY_DB`. `./build.sh` passes `TICKFORGE_ENGINE_FLAGS` to the engine, for example `TICKFORGE_ENGINE_FLAGS=--no-pin ./build.sh`.
 
 ## Repository layout
 
