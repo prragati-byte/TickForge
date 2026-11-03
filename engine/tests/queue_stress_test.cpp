@@ -1,75 +1,69 @@
-// matching-engine/tests/queue_stress_test.cpp
-// Multi-producer single-consumer stress test for MPSCQueue.
-// Verifies: no items lost, zero leaks (run under valgrind), no deadlock.
-
+// Stress test for MPSCQueue. Also built with ThreadSanitizer and AddressSanitizer
+// (see CMakeLists.txt).
+//
+// Every item is (producer number, counter). The consumer checks that
+//   - nothing is lost or duplicated,
+//   - items from one producer come out in the order they went in,
+//   - the queue still works when far more than 128 threads have used it over
+//     time (hazard slots are reused when a thread ends).
 #include "lock_free_queue.hpp"
-#include "order.hpp"
+#include "test_util.hpp"
+
 #include <atomic>
-#include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <thread>
 #include <vector>
 
-static constexpr int    NUM_PRODUCERS  = 8;
-static constexpr int    ITEMS_PER_PROD = 50'000;
-static constexpr uint64_t TOTAL_ITEMS  = (uint64_t)NUM_PRODUCERS * ITEMS_PER_PROD;
+// Run `producers` threads that each push `per_producer` items. At most
+// `at_once` threads run together; the rest start as earlier ones finish.
+static void run_case(const char *name, int producers, int per_producer, int at_once) {
+  MPSCQueue<uint64_t> q;
+  const uint64_t total = static_cast<uint64_t>(producers) * per_producer;
+  std::vector<uint64_t> next_expected(producers, 0);
+  uint64_t consumed = 0;
+  bool ok = true;
+
+  auto t0 = std::chrono::steady_clock::now();
+
+  std::thread consumer([&] {
+    while (consumed < total) {
+      uint64_t v;
+      if (!q.dequeue(v)) {
+        std::this_thread::yield();
+        continue;
+      }
+      uint64_t p = v >> 32, i = v & 0xffffffffu;
+      if (p >= static_cast<uint64_t>(producers) || next_expected[p] != i) ok = false;
+      else next_expected[p]++;
+      consumed++;
+    }
+  });
+
+  for (int start = 0; start < producers; start += at_once) {
+    std::vector<std::thread> batch;
+    for (int p = start; p < producers && p < start + at_once; p++)
+      batch.emplace_back([&q, p, per_producer] {
+        for (int i = 0; i < per_producer; i++) q.enqueue((static_cast<uint64_t>(p) << 32) | i);
+      });
+    for (auto &t : batch) t.join();
+  }
+  consumer.join();
+
+  uint64_t extra;
+  CHECK(!q.dequeue(extra)); // nothing left over
+  CHECK(ok);
+  CHECK(consumed == total);
+
+  double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  std::cout << "  " << name << ": " << producers << " producers x " << per_producer << " items, "
+            << (ok && consumed == total ? "ok" : "FAILED") << ", " << ms << " ms\n";
+}
 
 int main() {
-    MPSCQueue<uint64_t> q;
-    std::atomic<uint64_t> total_consumed{0};
-    std::atomic<bool> done{false};
-
-    // Consumer thread
-    std::thread consumer([&]() {
-        uint64_t cnt = 0;
-        while (true) {
-            uint64_t val;
-            if (q.dequeue(val)) {
-                ++cnt;
-                // XOR checksum — just to prevent optimisation
-                (void)val;
-            } else {
-                if (done.load(std::memory_order_acquire) && cnt == TOTAL_ITEMS) break;
-                std::this_thread::yield();
-            }
-        }
-        total_consumed.store(cnt, std::memory_order_release);
-    });
-
-    auto t0 = std::chrono::high_resolution_clock::now();
-
-    // Producer threads
-    std::vector<std::thread> producers;
-    for (int p = 0; p < NUM_PRODUCERS; ++p) {
-        producers.emplace_back([&, p]() {
-            uint64_t base = (uint64_t)p * ITEMS_PER_PROD;
-            for (int i = 0; i < ITEMS_PER_PROD; ++i) {
-                q.enqueue(base + i);
-            }
-        });
-    }
-
-    for (auto &t : producers) t.join();
-    done.store(true, std::memory_order_release);
-    consumer.join();
-
-    auto t1 = std::chrono::high_resolution_clock::now();
-    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-    uint64_t consumed = total_consumed.load();
-    bool ok = (consumed == TOTAL_ITEMS);
-
-    std::cout << "MPSCQueue stress test\n";
-    std::cout << "  Producers   : " << NUM_PRODUCERS << "\n";
-    std::cout << "  Items/prod  : " << ITEMS_PER_PROD << "\n";
-    std::cout << "  Total items : " << TOTAL_ITEMS << "\n";
-    std::cout << "  Consumed    : " << consumed << "\n";
-    std::cout << "  Status      : " << (ok ? "PASS" : "FAIL - items lost!") << "\n";
-    std::cout << "  Elapsed     : " << ms << " ms\n";
-    std::cout << "  Throughput  : "
-              << (TOTAL_ITEMS / (ms / 1000.0) / 1e6) << " M ops/sec\n";
-
-    assert(ok && "Queue stress test: items were lost!");
-    return ok ? 0 : 1;
+  run_case("8 producers at once", 8, 20000, 8);
+  run_case("one producer, long run (more than 1024 retired nodes)", 1, 200000, 1);
+  run_case("400 short-lived threads, 100 at a time", 400, 500, 100);
+  return finish("queue_stress_test");
 }

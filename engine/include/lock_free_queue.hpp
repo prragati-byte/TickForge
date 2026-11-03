@@ -1,92 +1,96 @@
 #pragma once
-// ── lock_free_queue.hpp ───────────────────────────────────────────────────────
-// Michael-Scott MPSC queue with hazard pointers.
-// BUG FIX: retire overflow now falls back to direct delete after a scan
-//          rather than leaking the node.
-// NOTE: dequeue() is single-consumer; only enqueue() is multi-producer-safe.
+// Multi-producer, single-consumer queue (Michael-Scott linked list).
+//
+// Producers call enqueue() from any thread. Only ONE thread may call dequeue().
+// Hazard pointers keep a producer's tail pointer from being freed while it is
+// still reading it.
+//
+// Changes made after the audit (see docs/DECISIONS.md, "Queue audit"):
+//  1. dequeue() moves the tail forward before it frees the old head. Before,
+//     a producer could read a lagging tail that the consumer had just freed
+//     (a use after free; found by reading the code, the stress tests never
+//     hit that timing window).
+//  2. A hazard pointer is published with seq_cst, and the free-scan reads it
+//     with seq_cst. With only release/acquire the store may be reordered after
+//     the validation load.
+//  3. Retired nodes live in a consumer-only std::vector. The old fixed array
+//     of 1,024 slots could fill up and leak, and was scanned on every dequeue
+//     (about 65,000 loads per item; the measured cost is in docs/DECISIONS.md).
+//  4. Thread slots are handed out from a pool and given back when a thread
+//     exits. The old counter wrapped at 64, so two threads could share one
+//     hazard slot. Now at most MAX_THREADS threads may enqueue at the same
+//     time; one more aborts with a message instead of corrupting memory.
 
 #include <array>
 #include <atomic>
-#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+namespace tf_queue_detail {
+
+constexpr int MAX_THREADS = 128;
+
+// Pool of hazard slot numbers shared by all queues in the process.
+inline std::array<std::atomic<bool>, MAX_THREADS> &slot_pool() {
+  static std::array<std::atomic<bool>, MAX_THREADS> pool{};
+  return pool;
+}
+
+// One per thread; gives its slot back when the thread ends.
+struct SlotOwner {
+  int slot = -1;
+  SlotOwner() {
+    auto &pool = slot_pool();
+    for (int i = 0; i < MAX_THREADS; i++) {
+      bool expected = false;
+      if (pool[i].compare_exchange_strong(expected, true)) {
+        slot = i;
+        return;
+      }
+    }
+    std::fprintf(stderr, "MPSCQueue: more than %d producer threads\n", MAX_THREADS);
+    std::abort();
+  }
+  ~SlotOwner() { slot_pool()[slot].store(false); }
+};
+
+inline int my_slot() {
+  thread_local SlotOwner owner;
+  return owner.slot;
+}
+
+} // namespace tf_queue_detail
 
 template <typename T> class MPSCQueue {
-private:
   struct Node {
-    std::atomic<Node *> next;
-    T data;
-    Node() : next(nullptr) {}
+    std::atomic<Node *> next{nullptr};
+    T data{};
   };
 
-  static constexpr int    MAX_THREADS      = 64;
-  static constexpr size_t RETIRE_CAPACITY  = 1024;
+  static constexpr int MAX_THREADS = tf_queue_detail::MAX_THREADS;
+  static constexpr size_t SCAN_EVERY = 64; // free retired nodes in batches
 
   std::atomic<Node *> head_;
   std::atomic<Node *> tail_;
+  std::array<std::atomic<Node *>, MAX_THREADS> hazard_;
+  std::vector<Node *> retired_; // touched by the consumer thread only
 
-  std::array<std::atomic<Node *>, MAX_THREADS>     hazard_;
-  std::array<std::atomic<Node *>, RETIRE_CAPACITY> retired_;
-  std::atomic<size_t> retired_count_;
+  // Free every retired node that no producer is pointing at.
+  void reclaim() {
+    std::array<Node *, MAX_THREADS> in_use;
+    for (int i = 0; i < MAX_THREADS; i++)
+      in_use[i] = hazard_[i].load(std::memory_order_seq_cst);
 
-  // Assign each calling thread a unique slot in [0, MAX_THREADS).
-  int thread_slot() {
-    static std::atomic<int> counter{0};
-    thread_local int slot = counter.fetch_add(1, std::memory_order_relaxed);
-    return slot % MAX_THREADS; // guard against runaway counter
-  }
-
-  bool is_hazardous(Node *node) const {
-    for (int i = 0; i < MAX_THREADS; i++) {
-      if (hazard_[i].load(std::memory_order_acquire) == node)
-        return true;
+    size_t kept = 0;
+    for (Node *n : retired_) {
+      bool hazardous = false;
+      for (Node *h : in_use)
+        if (h == n) hazardous = true;
+      if (hazardous) retired_[kept++] = n;
+      else delete n;
     }
-    return false;
-  }
-
-  // FIX: On retire-array overflow, scan retired list first, then delete
-  //      directly if still not hazardous.  The old code just called
-  //      delete node immediately on overflow, even if another thread
-  //      held a hazard pointer to it — use-after-free.
-  void retire(Node *node) {
-    // First: try to find an empty slot in the retired array.
-    size_t count = retired_count_.load(std::memory_order_acquire);
-    if (count < RETIRE_CAPACITY) {
-      size_t idx = retired_count_.fetch_add(1, std::memory_order_acq_rel);
-      if (idx < RETIRE_CAPACITY) {
-        retired_[idx].store(node, std::memory_order_release);
-        return;
-      }
-    }
-    // Array is full: reclaim first, then retry or delete if safe.
-    try_reclaim();
-    for (size_t i = 0; i < RETIRE_CAPACITY; i++) {
-      Node *expected = nullptr;
-      if (retired_[i].compare_exchange_strong(expected, node,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_relaxed)) {
-        return;
-      }
-    }
-    // Still no slot — safe to delete only if nobody holds a hazard on it.
-    if (!is_hazardous(node)) {
-      delete node;
-    }
-    // If hazardous: we leak this one node.  Extremely rare (only when
-    // both the retired array is 100% occupied AND the node is live in
-    // another thread's hazard slot).  Production code would use a
-    // thread-local overflow list here.
-  }
-
-  void try_reclaim() {
-    for (size_t i = 0; i < RETIRE_CAPACITY; i++) {
-      Node *n = retired_[i].load(std::memory_order_acquire);
-      if (n != nullptr && !is_hazardous(n)) {
-        if (retired_[i].compare_exchange_strong(n, nullptr,
-                                                 std::memory_order_acq_rel,
-                                                 std::memory_order_relaxed)) {
-          delete n;
-        }
-      }
-    }
+    retired_.resize(kept);
   }
 
 public:
@@ -94,71 +98,63 @@ public:
     Node *dummy = new Node();
     head_.store(dummy, std::memory_order_relaxed);
     tail_.store(dummy, std::memory_order_relaxed);
-    retired_count_.store(0, std::memory_order_relaxed);
-    for (int i = 0; i < MAX_THREADS; i++)
-      hazard_[i].store(nullptr, std::memory_order_relaxed);
-    for (size_t i = 0; i < RETIRE_CAPACITY; i++)
-      retired_[i].store(nullptr, std::memory_order_relaxed);
+    for (auto &h : hazard_) h.store(nullptr, std::memory_order_relaxed);
   }
 
+  MPSCQueue(const MPSCQueue &) = delete;
+  MPSCQueue &operator=(const MPSCQueue &) = delete;
+
   ~MPSCQueue() {
-    // Drain remaining retired list
-    try_reclaim();
-    Node *curr = head_.load(std::memory_order_relaxed);
-    while (curr != nullptr) {
-      Node *next = curr->next.load(std::memory_order_relaxed);
-      delete curr;
-      curr = next;
+    for (Node *n : retired_) delete n;
+    Node *cur = head_.load(std::memory_order_relaxed);
+    while (cur != nullptr) {
+      Node *next = cur->next.load(std::memory_order_relaxed);
+      delete cur;
+      cur = next;
     }
   }
 
   void enqueue(const T &value) {
-    Node *new_node = new Node();
-    new_node->data = value;
-    int slot = thread_slot();
+    Node *node = new Node();
+    node->data = value;
+    std::atomic<Node *> &hazard = hazard_[tf_queue_detail::my_slot()];
 
     while (true) {
-      Node *curr_tail = tail_.load(std::memory_order_acquire);
-      hazard_[slot].store(curr_tail, std::memory_order_release);
+      Node *tail = tail_.load(std::memory_order_seq_cst);
+      hazard.store(tail, std::memory_order_seq_cst);
+      // The tail may have moved (and been freed) before the hazard was visible.
+      if (tail != tail_.load(std::memory_order_seq_cst)) continue;
 
-      // Validate hazard pointer: re-read tail to ensure curr_tail is still live.
-      if (curr_tail != tail_.load(std::memory_order_acquire))
+      Node *next = tail->next.load(std::memory_order_acquire);
+      if (next != nullptr) {
+        // Another producer linked its node but has not moved the tail yet.
+        tail_.compare_exchange_weak(tail, next, std::memory_order_seq_cst);
         continue;
-
-      Node *next = curr_tail->next.load(std::memory_order_acquire);
-
-      if (curr_tail == tail_.load(std::memory_order_acquire)) {
-        if (next == nullptr) {
-          Node *expected = nullptr;
-          if (curr_tail->next.compare_exchange_weak(
-                  expected, new_node, std::memory_order_release,
-                  std::memory_order_relaxed)) {
-            tail_.compare_exchange_strong(curr_tail, new_node,
-                                          std::memory_order_release,
-                                          std::memory_order_relaxed);
-            hazard_[slot].store(nullptr, std::memory_order_release);
-            return;
-          }
-        } else {
-          // Help advance tail
-          tail_.compare_exchange_weak(curr_tail, next,
-                                      std::memory_order_release,
-                                      std::memory_order_relaxed);
-        }
+      }
+      Node *expected = nullptr;
+      if (tail->next.compare_exchange_weak(expected, node, std::memory_order_release,
+                                           std::memory_order_relaxed)) {
+        tail_.compare_exchange_strong(tail, node, std::memory_order_seq_cst);
+        hazard.store(nullptr, std::memory_order_release);
+        return;
       }
     }
   }
 
-  // Single-consumer dequeue.
+  // Single consumer only. Returns false when the queue is empty.
   bool dequeue(T &out) {
-    Node *curr_head = head_.load(std::memory_order_acquire);
-    Node *next      = curr_head->next.load(std::memory_order_acquire);
-    if (next == nullptr)
-      return false;
+    Node *head = head_.load(std::memory_order_relaxed);
+    Node *next = head->next.load(std::memory_order_acquire);
+    if (next == nullptr) return false;
     out = next->data;
-    head_.store(next, std::memory_order_release);
-    retire(curr_head);
-    try_reclaim();
+
+    // Never retire a node the tail still points to.
+    Node *tail = head;
+    tail_.compare_exchange_strong(tail, next, std::memory_order_seq_cst);
+
+    head_.store(next, std::memory_order_relaxed);
+    retired_.push_back(head);
+    if (retired_.size() >= SCAN_EVERY) reclaim();
     return true;
   }
 };
