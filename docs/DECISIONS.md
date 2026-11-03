@@ -131,3 +131,21 @@ Both versions pass `queue_stress_test` under ThreadSanitizer and AddressSanitize
 - **What the test proves.** Same state hash, same books and a byte-identical WAL, after: catch-up, live flow, 4 clients at once, `kill -9` of the follower under load, `kill -9` of the leader under load, and a restart. All of it also under TSan and ASan (10 runs each) and 20 plain runs, no failures.
 - **Testing the test.** Six bugs were put into copies of the server. Three were caught at once: no WAL on the follower, dropped cancels, followers taking orders. Missing CRC check showed up as a hang (the timeout catches it). One is harmless: without the `follower_ahead` check, the next check refuses that follower as `diverged`. **One got through at first:** JSON lines mixed into the WAL stream, because the follower reconnects after a damaged frame and still ends up correct. So the follower now counts `damaged_frames` and the test requires 0; that catches it.
 - **Cost, measured on one machine.** `--replicate` with no follower: none measurable. With a follower on the same machine: RTT P50 123 to 162 us at paced load; at full load 18,310 to 12,279 orders/s. The follower had everything about 1 ms after the last ack. This is why it is off by default. Localhost only: a real network was not tested.
+
+## AF_XDP: feasibility only, not built
+
+Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, which tries each step for real.
+
+| Step | Normal user | User and network namespace (`unshare -Urn`), veth pair |
+|---|---|---|
+| Kernel config: `XDP_SOCKETS`, `VETH`, `BPF_SYSCALL`, `BPF_JIT` | all `y` | all `y` |
+| Create a veth pair | no | yes |
+| `socket(AF_XDP)` | `EPERM` | yes |
+| UMEM, fill, completion, RX and TX rings | | yes |
+| Bind to veth in copy mode (what generic / skb XDP uses) | | yes |
+| Create an `XSKMAP` | | `EPERM` |
+| Load an XDP program | | `EPERM` |
+
+- **Result: it cannot be tested here, so it stays planned, not built.** A socket can be bound, but it can only receive through an XDP program that redirects packets into an `XSKMAP`, and loading BPF needs real privileges: a user namespace does not grant them, `kernel.unprivileged_bpf_disabled` is 2, and sudo here asks for a password.
+- **With root it may well work:** nothing found rules it out, but that part was not run, so it is not claimed. To check, run the probe as root on a veth device.
+- **It would not fit today's engine anyway.** Orders arrive over TCP on 127.0.0.1. AF_XDP takes raw packets from a device, so it would need its own ingress protocol, and loopback traffic would not go through it.

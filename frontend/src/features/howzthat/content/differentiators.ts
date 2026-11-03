@@ -293,7 +293,7 @@ export const DIFFERENTIATORS: DifferentiatorGroup[] = [
         problem: "Page-cache copies, kernel network overhead, slow batch analytics.",
         research: "Axboe (2019) io_uring; Høiland-Jørgensen et al. (2018) XDP; Zhou and Ross (2002); Polychroniou et al. (2015).",
         approach: "Advanced, last in the plan. SIMD only for analytics batches, not the branchy matching loop.",
-        implementation: "io_uring is built and off by default: --wal-io uring for the engine WAL, TICKFORGE_DB_IO=uring for SSTables and compaction (batched, O_DIRECT where the file system allows it). XDP and SIMD are not built; orders arrive over a local TCP socket on 127.0.0.1, not a real network.",
+        implementation: "io_uring is built and off by default: --wal-io uring for the engine WAL, TICKFORGE_DB_IO=uring for SSTables and compaction (batched, O_DIRECT where the file system allows it). XDP and SIMD are not built; orders arrive over a local TCP socket on 127.0.0.1, not a real network. AF_XDP was checked for feasibility only: the kernel supports it, but loading the XDP program needs root (docs/DECISIONS.md).",
         difference: "Measured slower than the normal path on this machine, so it is not the default.",
         verification: "engine/tests/uring_wal_test.cpp and storage/tests/uring_test.rs check identical bytes, recovery and kill -9. Numbers in docs/BENCHMARKS.md.",
         limitations: "The WAL needs one wait per frame, because an order must be logged before its ack; on ext4 each one goes through a kernel worker thread. The page-cache benefit of O_DIRECT under memory pressure was not measured.",

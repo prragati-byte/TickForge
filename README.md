@@ -65,7 +65,7 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |
-| Kernel bypass networking | planned | |
+| Kernel bypass networking (AF_XDP) | planned, not built | Feasibility only: the kernel supports it, but receiving packets needs root, which was not available here. See `docs/DECISIONS.md` |
 
 ### Behavioural features
 
