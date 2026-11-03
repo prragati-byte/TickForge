@@ -58,7 +58,7 @@ export const EXPERIMENTS: Experiment[] = [
     variable: "Core affinity on/off.",
     metric: "P99 and P99.99 latency.",
     procedure: "Same load, with and without affinity, on an otherwise idle machine.",
-    interpretation: "Quantifies scheduler jitter on this machine. Result: no measurable gain and a slightly worse tail in the longest run (docs/BENCHMARKS.md), so it is off by default; on WSL2 the pin is to a virtual CPU.",
+    interpretation: "Quantifies scheduler jitter on this machine. Result: no measurable effect, with small differences that change sign from run to run (docs/BENCHMARKS.md), so it is off by default; on WSL2 the pin is to a virtual CPU.",
     status: "first-run",
     needs: "Core affinity is not implemented.",
   },

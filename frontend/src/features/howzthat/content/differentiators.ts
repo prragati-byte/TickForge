@@ -283,7 +283,7 @@ export const DIFFERENTIATORS: DifferentiatorGroup[] = [
         implementation: "Built, off by default: --pin turns it on, --pin-core chooses the core. The matching thread gets one core (the last one this process may use); every other thread is kept off it and off its SMT sibling.",
         difference: "No isolcpus: the kernel can still run other processes on that core. The thread is pinned, the core is not reserved.",
         verification: "engine/tests/pinning_test.cpp reads each thread's allowed CPUs from /proc. Pinned vs unpinned is in docs/BENCHMARKS.md.",
-        limitations: "Linux only. No measurable gain on this machine, and a slightly worse tail in the longest run, which is why it is off. WSL2 pins to a virtual CPU, and the hypervisor still moves that between physical cores; bare metal with isolcpus was not tested.",
+        limitations: "Linux only. No measurable effect on this machine, with small differences that change sign from run to run, which is why it is off. WSL2 pins to a virtual CPU, and the hypervisor still moves that between physical cores; bare metal with isolcpus was not tested.",
         files: ["engine/include/affinity.hpp", "engine/src/engine_server.cpp"],
       },
       {
