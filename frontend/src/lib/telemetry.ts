@@ -1,9 +1,12 @@
+// Live engine numbers from exchange-api (/ws/telemetry). Prices are integer cents.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type EngineState = "closed" | "running" | "paused" | "stopped";
 export type LinkState = "connecting" | "live" | "offline";
 
+/** price is in cents */
 export type BookLevel = { price: number; qty: number };
+/** price is in cents; buy and sell are virtual trader ids (0 = a manual order) */
 export type EngineTrade = { id: number; price: number; qty: number; buy: number; sell: number };
 
 export type EngineStats = {
@@ -27,12 +30,16 @@ export type EngineStats = {
   asks: BookLevel[];
 };
 
+export type TelemetryMessage =
+  | { type: "status"; state: EngineState; error: string }
+  | { type: "stats"; stats: EngineStats; trades: EngineTrade[] };
+
 export type TelemetryCommand =
   | { cmd: "start" | "pause" | "stop" | "reset" }
   | { cmd: "speed"; value: 1 | 10 | 100 }
   | { cmd: "order"; side: "BUY" | "SELL"; qty: number; price: number };
 
-export const TELEMETRY_URL: string = import.meta.env.VITE_TELEMETRY_URL || "ws://127.0.0.1:9001";
+export const TELEMETRY_URL: string = import.meta.env.VITE_TELEMETRY_URL || "ws://127.0.0.1:8001/ws/telemetry";
 
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
 const numArray = (value: unknown): number[] => (Array.isArray(value) ? value.map(num) : []);
@@ -77,6 +84,26 @@ function parseTrades(value: unknown): EngineTrade[] {
     .map((t) => ({ id: num(t.id), price: num(t.price), qty: num(t.qty), buy: num(t.buy), sell: num(t.sell) }));
 }
 
+/** Turn one WebSocket text frame into a typed message. Returns null for anything that is not a known message. */
+export function parseTelemetry(raw: string): TelemetryMessage | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+
+  if (d.type === "status") {
+    const state = d.state;
+    if (state !== "closed" && state !== "running" && state !== "paused" && state !== "stopped") return null;
+    return { type: "status", state, error: typeof d.error === "string" ? d.error : "" };
+  }
+  if (d.type === "stats") return { type: "stats", stats: parseStats(d), trades: parseTrades(d.trades) };
+  return null;
+}
+
 const MAX_TRADES = 12;
 
 export function useTelemetry() {
@@ -112,38 +139,26 @@ export function useTelemetry() {
 
       socket.onmessage = (event) => {
         if (typeof event.data !== "string") return;
-        let data: unknown;
-        try {
-          data = JSON.parse(event.data);
-        } catch {
-          return;
-        }
-        if (!data || typeof data !== "object") return;
-        const d = data as Record<string, unknown>;
-
-        if (d.type === "status") {
-          const next = d.state;
-          if (next === "closed" || next === "running" || next === "paused" || next === "stopped") {
-            setEngineState(next);
-            if (next === "closed") {
-              setStats(null);
-              setTrades([]);
-            }
+        const message = parseTelemetry(event.data);
+        if (!message) return;
+        if (message.type === "status") {
+          setEngineState(message.state);
+          setEngineError(message.error);
+          if (message.state === "closed") {
+            setStats(null);
+            setTrades([]);
           }
-          setEngineError(typeof d.error === "string" ? d.error : "");
-        } else if (d.type === "stats") {
-          setStats(parseStats(d));
-          const batch = parseTrades(d.trades);
-          if (batch.length > 0) {
-            setTrades((prev) => [...batch.reverse(), ...prev].slice(0, MAX_TRADES));
+        } else {
+          setStats(message.stats);
+          if (message.trades.length > 0) {
+            // the server sends oldest first; the tape shows newest first
+            setTrades((prev) => [...message.trades.reverse(), ...prev].slice(0, MAX_TRADES));
           }
         }
       };
 
-      // Handle a dropped / failed connection exactly once. Some WebSocket
-      // implementations fire only `error` (never `close`) when the server is
-      // unreachable, so both events lead here. Re-entrancy is blocked by the flag,
-      // which also makes the socket.close() below safe.
+      // Handle a dropped / failed connection exactly once. Some browsers fire only `error`
+      // (never `close`) when the server is unreachable, so both events lead here.
       let dropped = false;
       const handleDrop = () => {
         if (dropped) return;

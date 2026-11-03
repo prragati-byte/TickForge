@@ -1,0 +1,36 @@
+/** Works cited in the research document that have no paper page yet. Written as in the document; not yet checked. */
+export const PDF_REFERENCES: { kind: "paper" | "spec" | "book" | "doc"; text: string; url?: string }[] = [
+  { kind: "spec", text: "FIX Trading Community. Simple Binary Encoding (SBE) specification.", url: "https://github.com/FIXTradingCommunity/fix-simple-binary-encoding" },
+  { kind: "paper", text: "Luo, C. and Carey, M. J. (2020). LSM-based storage techniques: a survey. The VLDB Journal. arXiv:1812.07527." },
+  { kind: "paper", text: "Dayan, N. and Idreos, S. (2018). Dostoevsky: better space-time trade-offs for LSM-tree based key-value stores via adaptive removal of superfluous merging. SIGMOD." },
+  { kind: "paper", text: "Dayan, N., Athanassoulis, M. and Idreos, S. (2017). Monkey: optimal navigable key-value store. SIGMOD." },
+  { kind: "paper", text: "Pugh, W. (1990). Skip lists: a probabilistic alternative to balanced trees. Communications of the ACM 33(6); and Concurrent maintenance of skip lists (technical report)." },
+  { kind: "doc", text: "Fraser, K. (2004). Practical lock-freedom. PhD thesis, University of Cambridge." },
+  { kind: "book", text: "Herlihy, M. and Shavit, N. The Art of Multiprocessor Programming." },
+  { kind: "paper", text: "Chilimbi, T. M., Davidson, B. and Larus, J. R. (1999). Cache-conscious structure definition. PLDI." },
+  { kind: "paper", text: "Budish, E., Cramton, P. and Shim, J. (2015). The high-frequency trading arms race. Quarterly Journal of Economics." },
+  { kind: "paper", text: "Ongaro, D. and Ousterhout, J. (2014). In search of an understandable consensus algorithm (Raft). USENIX ATC." },
+  { kind: "paper", text: "Høiland-Jørgensen, T. et al. (2018). The eXpress Data Path: fast programmable packet processing in the operating system kernel. CoNEXT.", url: "https://dl.acm.org/doi/10.1145/3281411.3281443" },
+  { kind: "doc", text: "Axboe, J. (2019). Efficient IO with io_uring.", url: "https://kernel.dk/io_uring.pdf" },
+  { kind: "paper", text: "Thaler, R. H., Tversky, A., Kahneman, D. and Schwartz, A. (1997). The effect of myopia and loss aversion on risk taking: an experimental test. Quarterly Journal of Economics 112(2)." },
+  { kind: "paper", text: "Kahneman, D. and Tversky, A. (1979). Prospect theory: an analysis of decision under risk. Econometrica 47(2)." },
+  { kind: "paper", text: "De Bondt, W. F. M. and Thaler, R. (1985). Does the stock market overreact? Journal of Finance 40(3)." },
+  { kind: "paper", text: "Barber, B. M. and Odean, T. (2000). Trading is hazardous to your wealth. Journal of Finance 55(2)." },
+  { kind: "paper", text: "Bolosky, W. J. and Scott, M. L. (1993). False sharing and its effect on shared memory performance. USENIX SEDMS." },
+  { kind: "paper", text: "Torrellas, J., Lam, M. S. and Hennessy, J. L. (1994). False sharing and spatial locality in multiprocessor caches. IEEE Transactions on Computers 43(6)." },
+  { kind: "doc", text: "Drepper, U. (2007). What every programmer should know about memory." },
+  { kind: "paper", text: "Belay, A. et al. (2014). IX: a protected dataplane operating system for high throughput and low latency. OSDI." },
+  { kind: "paper", text: "Peter, S. et al. (2014). Arrakis: the operating system is the control plane. OSDI." },
+  { kind: "paper", text: "Bonwick, J. (1994). The slab allocator: an object-caching kernel memory allocator. USENIX Summer." },
+  { kind: "paper", text: "Berger, E. D. et al. (2000). Hoard: a scalable memory allocator for multithreaded applications. ASPLOS." },
+  { kind: "paper", text: "Wilson, P. R. et al. (1995). Dynamic storage allocation: a survey and critical review. IWMM." },
+  { kind: "paper", text: "Zhou, J. and Ross, K. A. (2002). Implementing database operations using SIMD instructions. SIGMOD." },
+  { kind: "paper", text: "Polychroniou, O., Raghavan, A. and Ross, K. A. (2015). Rethinking SIMD vectorization for in-memory databases. SIGMOD." },
+];
+
+export const ACKNOWLEDGMENTS = [
+  "The original TickForge repository (SHAURYASAXENA2024/TickForge), which this fork builds on, and the whole team.",
+  "The team's research document, “TickForge: Problem Statement, Differentiators and Research Foundation”, which this page follows.",
+  "Price data from Yahoo Finance through the open-source yfinance library.",
+  "The authors of the papers above. Their results are theirs; nothing here implies they reviewed or endorse TickForge.",
+];

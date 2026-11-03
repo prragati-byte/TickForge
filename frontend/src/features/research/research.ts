@@ -1,5 +1,5 @@
 // Pure helpers for the "How'z that!" research section: no React, no DOM, easy to test.
-// Paper pages are markdown files in ./research (see research/README.md for the format).
+// Paper pages are markdown files in ./papers (see README.md in this folder for the format).
 
 export type PaperStatus = "implemented" | "partial" | "planned" | "rejected";
 export type Section = { heading: string; body: string };

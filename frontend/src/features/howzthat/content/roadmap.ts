@@ -1,0 +1,16 @@
+export type RoadmapItem = { title: string; stage: "next" | "planned" | "later"; problem: string; why: string; needs: string; done: string };
+
+export const ROADMAP: RoadmapItem[] = [
+  { title: "Benchmark harness", stage: "next", problem: "No measured evidence for any performance claim.", why: "Every other optimisation needs a baseline to be judged against.", needs: "Fill benchmarks/lockfree_vs_mutex_bench.cpp; CAS counters; a fine-grained histogram.", done: "Throughput and P50/P99/P99.99 for lock-free vs mutex, with machine details, in section 07." },
+  { title: "Order-book tests and integer ticks", stage: "next", problem: "Matching is untested and doubles can split equal prices.", why: "Correctness first; dense arrays need ticks anyway.", needs: "Unit tests with hand-worked orders; tick-size conversion.", done: "Tests for partial fills, time priority and trade price pass." },
+  { title: "WAL and deterministic replay", stage: "planned", problem: "Trades are lost on a crash.", why: "Recovery is half of the problem statement.", needs: "Sequence numbers recorded per input; a log format; snapshots.", done: "Random-crash test: replayed book hash equals pre-crash hash every time." },
+  { title: "LSM storage with Bloom filters", stage: "planned", problem: "No durable, queryable trade history.", why: "Storage is the backbone of the target architecture.", needs: "The WAL; MemTable with atomic swap; SSTable format.", done: "Writes and time-range reads work; lookup latency and false-positive rate measured." },
+  { title: "Activity-aware compaction", stage: "planned", problem: "Compaction spikes would hurt matching latency.", why: "The main research-flavoured idea; must be compared with SILK.", needs: "The LSM store; queue-depth signal.", done: "Matching P99 during compaction, throttled vs unthrottled." },
+  { title: "Object pools and cache-line padding", stage: "planned", problem: "Heap allocation and false sharing on the hot path.", why: "Cheap to try once the benchmark exists.", needs: "The benchmark harness.", done: "Latency distribution with and without each change." },
+  { title: "Dense-array order book", stage: "planned", problem: "Pointer chasing in std::map/std::deque.", why: "Directly on the matching path.", needs: "Integer ticks; book tests.", done: "Matching throughput and cache misses vs the map book." },
+  { title: "Core pinning", stage: "planned", problem: "Scheduler jitter.", why: "Simple to add, easy to measure.", needs: "The benchmark harness; Linux.", done: "Pinned vs unpinned P99." },
+  { title: "Paper-trading ledger, P&L windows and scenario visualizer", stage: "planned", problem: "Behavioural features stop at market history.", why: "Completes the behaviour-aware UX in the research document.", needs: "Order acks and every fill as events (no sampling); positions in exchange-api.", done: "Ledger tests; optional small user study." },
+  { title: "io_uring, XDP/AF_XDP, SIMD analytics", stage: "later", problem: "Kernel and I/O overhead; slow batch analytics.", why: "Advanced; only worth it after the basics are measured.", needs: "Storage engine (io_uring); a network ingress (XDP); analytics batches (SIMD).", done: "Each measured against the path it replaces." },
+];
+
+// ---- 10 References --------------------------------------------------------------------------------------

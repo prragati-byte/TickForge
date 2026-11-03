@@ -21,14 +21,13 @@ This draft describes what is built and how its correctness was checked. Performa
   to read; only the consumer retires nodes, and it frees a node only after checking no hazard points at it.
 - **Matching.** One thread owns the order book, so the book itself needs no locks and results are
   repeatable for a given input order. Price-time priority; trades at the resting price.
-- **Observation.** A telemetry driver runs the real engine and prints one JSON line every 250 ms; a small
-  Python bridge forwards it to the browser over a localhost-only WebSocket and validates every command
-  sent back.
+- **Observation.** The engine reports its own statistics on request; exchange-api forwards them to the browser over a
+  localhost-only WebSocket every second and checks every command sent back.
 - **Planned.** Write-ahead log, LSM-tree storage, Bloom filters, compaction, crash recovery by replay.
 
 ## Implementation
-C++17 engine (`matching-engine/`), Python FastAPI market-data service using Yahoo Finance
-(`market-data/`), Python WebSocket bridge (`telemetry-bridge/`), React and TypeScript dashboard (`frontend/`).
+C++17 engine (`engine/`), Python FastAPI market-data service using Yahoo Finance
+(`services/market-data/`), Python exchange-api service (`services/exchange-api/`), React and TypeScript dashboard (`frontend/`).
 Known simplifications: prices are `double` rather than integer ticks; one book for all symbols; no market
 orders, cancels or modifications; the matcher spins and yields when idle, so CPU usage looks high.
 

@@ -20,6 +20,10 @@ export type StockSnapshot = {
   history: PricePoint[];
 };
 
+/** The ranges the market-data API accepts for quotes, each with the one bar size it allows. */
+export type QuoteRange = "1d" | "1mo" | "1y";
+const QUOTE_INTERVAL: Record<QuoteRange, string> = { "1d": "5m", "1mo": "1d", "1y": "1d" };
+
 /** network = API unreachable, http = API answered with an error, contract = unexpected payload */
 export class StockApiError extends Error {
   kind: "network" | "http" | "contract";
@@ -61,8 +65,9 @@ async function requestJson(url: string, signal?: AbortSignal): Promise<unknown> 
   return data;
 }
 
-export async function getStockSnapshot(symbol: string, signal?: AbortSignal): Promise<StockSnapshot> {
-  const data = (await requestJson(`${API_URL}/api/stocks/${encodeURIComponent(symbol)}?range=1d&interval=5m`, signal)) as Partial<StockSnapshot>;
+export async function getStockSnapshot(symbol: string, range: QuoteRange = "1d", signal?: AbortSignal): Promise<StockSnapshot> {
+  const url = `${API_URL}/api/stocks/${encodeURIComponent(symbol)}?range=${range}&interval=${QUOTE_INTERVAL[range]}`;
+  const data = (await requestJson(url, signal)) as Partial<StockSnapshot>;
 
   if (
     !isString(data.symbol) ||
