@@ -47,7 +47,7 @@ What has been checked:
 - Crash recovery: replay equals the live state, the log cut at every byte offset, bit flips detected, the
   writer killed with SIGKILL, and the whole server killed with `kill -9`: the state hash is the same after restart.
 - Order books: the map book and the dense book give identical trades and state hash on the same random workload.
-- Database: 25 Rust tests and 6 Python tests.
+- Database: 28 Rust tests and 8 Python tests.
 - Market-data analytics: tests with hand-calculated expected values.
 - First benchmark (`docs/BENCHMARKS.md`, one machine, threads not pinned): the lock-free queue did not beat
   the mutex queue on raw throughput (1 producer 2.07 vs 2.85 M items/s; 8 producers 2.41 vs 3.66). Its
@@ -55,8 +55,8 @@ What has been checked:
   book ran 14.82 M ops/s (P50 84 ns, P99 347 ns) against 10.12 M ops/s (P50 114 ns, P99 402 ns) for the map book.
 
 What has **not** been measured yet:
-- Tail latency beyond p99 (p99.9, p99.99), and repeated runs on other machines.
-- WAL and matching latency during compaction, and recovery time.
+- Order-to-match latency beyond p99, and runs on other machines.
+- WAL and matching latency during compaction, and the engine's own recovery time. (The database's recovery time, next to MySQL's, is in `docs/BENCHMARKS.md`.)
 - Any user-facing effect of the behavioural features.
 
 ## Limitations

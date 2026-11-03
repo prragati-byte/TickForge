@@ -51,13 +51,13 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 26 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
 | Behavioural features: daily vs long-term window, volatility-scaled axis, scenario preview before an order, return next to worst fall | built | calculations unit-tested; see below |
 | `build.sh` | built, verified | `./build.sh test` passes all suites; the full stack was started with the real engine and database, and an order placed through the API matched in the engine, was attributed to the right two traders and appeared in the stored history |
-| C++ engine: TCP server, price-time matching, cancel, risk checks, integer cents | built, verified | `ctest` (6 tests) incl. an end-to-end test over TCP |
+| C++ engine: TCP server, price-time matching, cancel, risk checks, integer cents | built, verified | `ctest` (19 tests, also covering the optional features below) incl. an end-to-end test over TCP |
 | WAL and crash recovery | built, verified | `engine/tests/wal_recovery_test.cpp` (file cut at every byte, bit flips, writer killed with SIGKILL) and the engine test that `kill -9`s the server: the book hash is identical after restart. Survives a process crash, **not** a power cut (no fsync yet) |
 | Lock-free queue | built, verified | stress test under ThreadSanitizer and AddressSanitizer; review notes in `docs/DECISIONS.md` |
 | Dense-array order book (next to the `std::map` book) | built, verified, not used by the server | same random orders give identical trades and hash in `order_book_tests`; speed in `docs/BENCHMARKS.md` |
 | Rust LSM database (`tickforge_db`): memtable, SSTable with Bloom filter, compaction | built, verified | `cargo test` and `storage/tests/test_python.py` |
 | Engine benchmarks (lock-free vs mutex queue, dense vs map book) | built | `docs/BENCHMARKS.md`. On the test machine the mutex queue had higher raw throughput; read the table before drawing conclusions |
-| Core pinning (on by default, `--no-pin` to disable, `--pin-core N` to choose) | built, verified | `engine/tests/pinning_test.cpp` reads each thread's allowed CPUs from `/proc`. Pinned vs unpinned in `docs/BENCHMARKS.md`: no regression, and the gain is inside the run-to-run spread on this WSL2 machine |
+| Core pinning (off by default: `--pin` to enable, `--pin-core N` to choose, `--no-pin` to disable) | built, verified, not the default | `engine/tests/pinning_test.cpp` reads each thread's allowed CPUs from `/proc`. Pinned vs unpinned in `docs/BENCHMARKS.md`: no measurable gain on this WSL2 machine, and slightly worse tail latency in the longest run |
 | MySQL baseline: the database vs MySQL 8.4 InnoDB, same trades | measured | `./build.sh bench-mysql`, results and settings in `docs/BENCHMARKS.md`. Faster at this one narrow job with the same durability; its P99.99 is no better, and MySQL with fsync is stronger than anything TickForge offers |
 | Elastic dual ring queue (off by default, `--queue elastic`, `--ring-size N`) | built, verified, not the default | `engine/tests/elastic_ring_test.cpp` and the `kill -9` test on the real server, both under ThreadSanitizer and AddressSanitizer. Much faster than the list queue alone; no difference through the whole server, see `docs/BENCHMARKS.md` |
 | io_uring for storage (off by default: `--wal-io uring` for the engine WAL, `TICKFORGE_DB_IO=uring` for SSTables and compaction) | built, verified, not the default | `engine/tests/uring_wal_test.cpp`, `storage/tests/uring_test.rs`: identical bytes, recovery, `kill -9`. Slower on this machine, see `docs/BENCHMARKS.md`, so the normal path stays |
@@ -78,7 +78,7 @@ These follow the research document. They use real Yahoo price history, not forec
 
 ## Configuration
 
-Defaults work out of the box. See [.env.example](frontend/.env.example) for the frontend addresses. `exchange-api` reads `TICKFORGE_ENGINE_HOST`, `TICKFORGE_ENGINE_PORT`, `TICKFORGE_DATA_DIR` and (tests only) `TICKFORGE_MEMORY_DB`. The database reads `TICKFORGE_DB_IO` (`standard` or `uring`). `./build.sh` passes `TICKFORGE_ENGINE_FLAGS` to the engine, for example `TICKFORGE_ENGINE_FLAGS=--no-pin ./build.sh`.
+Defaults work out of the box. See [.env.example](frontend/.env.example) for the frontend addresses. `exchange-api` reads `TICKFORGE_ENGINE_HOST`, `TICKFORGE_ENGINE_PORT`, `TICKFORGE_DATA_DIR` and (tests only) `TICKFORGE_MEMORY_DB`. The database reads `TICKFORGE_DB_IO` (`standard` or `uring`). `./build.sh` passes `TICKFORGE_ENGINE_FLAGS` to the engine, for example `TICKFORGE_ENGINE_FLAGS=--pin ./build.sh`.
 
 ## Repository layout
 

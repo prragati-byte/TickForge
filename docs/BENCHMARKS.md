@@ -7,14 +7,14 @@ measured on the machine described here; they will differ on other machines.
 
 | | |
 |---|---|
-| Date (UTC) | 2026-11-03 09:57 |
+| Date (UTC) | 2026-11-03 20:58 |
 | CPU | 12th Gen Intel(R) Core(TM) i5-12450H |
 | Logical cores | 12 |
 | Memory | 7.6 GiB |
 | OS | Linux 6.18.54.1-microsoft-standard-WSL2 |
 | Compiler | c++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0 |
 | Build type | Release |
-| Source commit | 6b163a6 |
+| Source commit | ca29c83 |
 
 ## Results
 
@@ -32,14 +32,29 @@ Items per producer: 200000. One consumer thread. Latency is the time inside `enq
 
 | Queue | Producers | Throughput (M items/s) | enqueue P50 (ns) | enqueue P99 (ns) |
 |---|---|---|---|---|
-| lock-free | 1 | 2.07 | 87 | 6086 |
-| mutex | 1 | 2.85 | 62 | 3000 |
-| lock-free | 2 | 3.98 | 64 | 1692 |
-| mutex | 2 | 5.70 | 40 | 2254 |
-| lock-free | 4 | 3.70 | 432 | 3920 |
-| mutex | 4 | 4.99 | 45 | 20564 |
-| lock-free | 8 | 2.41 | 1289 | 26537 |
-| mutex | 8 | 3.66 | 74 | 45319 |
+| lock-free | 1 | 2.23 | 64 | 12608 |
+| mutex | 1 | 3.10 | 90 | 861 |
+| elastic ring | 1 | 15.07 | 29 | 103 |
+| lock-free | 2 | 4.19 | 60 | 1436 |
+| mutex | 2 | 6.15 | 40 | 3660 |
+| elastic ring | 2 | 14.34 | 118 | 173 |
+| lock-free | 4 | 3.29 | 567 | 4166 |
+| mutex | 4 | 4.52 | 56 | 21659 |
+| elastic ring | 4 | 20.72 | 155 | 272 |
+| lock-free | 8 | 2.59 | 1161 | 28718 |
+| mutex | 8 | 3.97 | 69 | 42112 |
+| elastic ring | 8 | 25.07 | 194 | 717 |
+
+## Queue burst: consumer starts 20 ms late
+
+4 producers, 250000 items each. Elastic rings are sized so the burst fits (2^21 slots), half fits (2^18), or barely fits at all (2^8).
+
+| Queue | enqueue P50 (ns) | enqueue P99 (ns) | Drain (ms) | Items through overflow |
+|---|---|---|---|---|
+| lock-free list | 568 | 4014 | 272.2 | every item is a heap node |
+| elastic ring 2^21 | 151 | 262 | 22.1 | 0 |
+| elastic ring 2^18 | 158 | 411 | 29.7 | 121611 |
+| elastic ring 2^8 | 225 | 641 | 114.4 | 999744 |
 
 ## Order book: std::map vs dense array
 
@@ -47,8 +62,17 @@ Items per producer: 200000. One consumer thread. Latency is the time inside `enq
 
 | Book | Throughput (M ops/s) | P50 (ns) | P99 (ns) | Trades |
 |---|---|---|---|---|
-| MapBook (std::map) | 10.12 | 114 | 402 | 822471 |
-| DenseBook (array) | 14.82 | 84 | 347 | 822471 |
+| MapBook (std::map) | 9.85 | 109 | 360 | 822471 |
+| DenseBook (array) | 14.73 | 84 | 333 | 822471 |
+
+## WAL append: write() vs io_uring
+
+200000 frames per run, 5 runs each, taking turns, one thread, no fsync. One frame per system call and the call waits for the result, because the engine must not acknowledge an order before its frame is written. Per-call time includes about 20-30 ns for reading the clock.
+
+| Backend | P50 (ns) | P99 (ns) | P99.9 (ns) | Frames/s |
+|---|---|---|---|---|
+| write() | 528 | 1891 | 4043 | 1364325 |
+| io_uring | 37310 | 71304 | 345662 | 25459 |
 
 ## Whole server, by engine flag
 
@@ -62,98 +86,31 @@ more than the matching thread can take.
 
 | Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
 |---|---|---|---|---|---|---|---|---|
-| unpinned | 2000 | 1993 to 2000 | 183.8 | 1060.5 | 3667.1 | 58.5 | 1504.3 | 510 to 11118 |
-| pinned | 2000 | 1999 to 2000 | 183.2 | 948.5 | 3311.8 | 52.5 | 1234.3 | 545 to 3877 |
+| unpinned | 2000 | 2000 to 2000 | 121.5 | 429.7 | 809.6 | 46.3 | 275.9 | 150 to 324 |
+| pinned | 2000 | 2000 to 2000 | 132.1 | 453.8 | 930.5 | 41.9 | 298.1 | 223 to 345 |
 
-4 connections, 200000 orders per run, 7 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run. The matcher columns here are a backlog of seconds, not latency: this load is more than the matching thread can take.
-
-| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) |
-|---|---|---|---|---|---|---|---|
-| unpinned | 15358 | 14654 to 15642 | 219.4 | 1009.9 | 1582.2 | 2381441.4 | 3930215.8 |
-| pinned | 15711 | 14736 to 15978 | 214.2 | 986.9 | 1493.1 | 2330488.2 | 3849743.9 |
-
-### Queue, whole server
-
-4 connections, 30000 orders per run, 9 runs per configuration, paced at 2000 orders/s in total.
+4 connections, 200000 orders per run, 7 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run.
 
 | Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
 |---|---|---|---|---|---|---|---|---|
-| lock-free list | 2000 | 2000 to 2000 | 122.6 | 396.6 | 857.3 | 43.4 | 290.1 | 112 to 339 |
-| elastic ring | 2000 | 2000 to 2000 | 122.3 | 435.3 | 918.9 | 40.8 | 296.4 | 227 to 336 |
+| unpinned | 18107 | 17674 to 18385 | 194.3 | 824.1 | 1263.4 | 2035556.2 | 3199205.7 | 3116260 to 3280375 |
+| pinned | 18281 | 18028 to 18411 | 195.0 | 813.2 | 1222.7 | 2027700.9 | 3135648.1 | 3017725 to 3421110 |
 
-4 connections, 200000 orders per run, 5 runs per configuration, closed loop, as fast as possible.
-
-| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
-|---|---|---|---|---|---|---|---|---|
-| lock-free list | 18622 | 17479 to 18734 | 191.2 | 830.0 | 1272.7 | 2007207.7 | 3206254.1 | 2971686 to 3367006 |
-| elastic ring | 18451 | 17747 to 19120 | 192.4 | 788.6 | 1210.1 | 2002849.7 | 3139007.0 | 2742227 to 3322015 |
-
-### Queues alone, including the elastic ring
-
-### Queue: lock-free vs mutex
-
-Items per producer: 200000. One consumer thread. Latency is the time inside `enqueue()`.
-
-| Queue | Producers | Throughput (M items/s) | enqueue P50 (ns) | enqueue P99 (ns) |
-|---|---|---|---|---|
-| lock-free | 1 | 2.02 | 72 | 12901 |
-| mutex | 1 | 2.94 | 92 | 782 |
-| elastic ring | 1 | 13.29 | 29 | 100 |
-| lock-free | 2 | 4.05 | 60 | 1414 |
-| mutex | 2 | 6.01 | 40 | 2665 |
-| elastic ring | 2 | 15.30 | 110 | 170 |
-| lock-free | 4 | 3.57 | 458 | 4082 |
-| mutex | 4 | 5.15 | 42 | 20764 |
-| elastic ring | 4 | 19.84 | 155 | 347 |
-| lock-free | 8 | 2.54 | 1143 | 26950 |
-| mutex | 8 | 4.27 | 65 | 39992 |
-| elastic ring | 8 | 6.77 | 260 | 3132 |
-
-### Queue burst: consumer starts 20 ms late
-
-4 producers, 250000 items each. Elastic rings are sized so the burst fits (2^21 slots), half fits (2^18), or barely fits at all (2^8).
-
-| Queue | enqueue P50 (ns) | enqueue P99 (ns) | Drain (ms) | Items through overflow |
-|---|---|---|---|---|
-| lock-free list | 601 | 3838 | 279.9 | every item is a heap node |
-| elastic ring 2^21 | 145 | 255 | 29.4 | 0 |
-| elastic ring 2^18 | 176 | 534 | 82.1 | 620704 |
-| elastic ring 2^8 | 225 | 694 | 125.1 | 999744 |
-
-### WAL append alone: write() vs io_uring
-
-200000 frames per run, 5 runs each, taking turns, one thread, no fsync. One frame per system call and the call waits for the result, because the engine must not acknowledge an order before its frame is written. Per-call time includes about 20-30 ns for reading the clock.
-
-| Backend | P50 (ns) | P99 (ns) | P99.9 (ns) | Frames/s |
-|---|---|---|---|---|
-| write() | 528 | 1863 | 4494 | 1370900 |
-| io_uring | 37306 | 69137 | 276793 | 25638 |
-
-### WAL writes, whole server
+### WAL writes
 
 4 connections, 30000 orders per run, 9 runs per configuration, paced at 2000 orders/s in total. Median over the runs; throughput also shows the slowest and fastest run.
 
 | Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
 |---|---|---|---|---|---|---|---|---|
-| write() | 2000 | 2000 to 2000 | 118.4 | 377.3 | 798.3 | 42.7 | 267.2 | 176 to 290 |
-| io_uring | 2000 | 2000 to 2000 | 259.8 | 699.9 | 1189.7 | 37.8 | 196.3 | 159 to 217 |
+| write() | 2000 | 2000 to 2000 | 137.8 | 453.5 | 853.6 | 44.3 | 299.9 | 226 to 414 |
+| io_uring | 2000 | 2000 to 2000 | 249.6 | 697.8 | 1272.3 | 42.0 | 219.9 | 96 to 262 |
 
 4 connections, 200000 orders per run, 5 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run.
 
 | Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
 |---|---|---|---|---|---|---|---|---|
-| write() | 18556 | 16145 to 18851 | 187.5 | 799.0 | 1230.5 | 2017748.0 | 3284530.2 | 3096572 to 4294967 |
-| io_uring | 10480 | 10151 to 10596 | 89.5 | 3027.3 | 5090.1 | 21.7 | 501.3 | 462 to 593 |
-
-### SSTable and compaction writes: normal path vs io_uring
-
-Median of 11 runs. Writing includes fsync and rename. One thread, nothing else running. O_DIRECT on this file system: used.
-
-| Operation | Normal write (ms) | io_uring (ms) |
-|---|---|---|
-| Write 10,000 trades | 6.6 | 8.0 |
-| Write 1,000,000 trades | 160.8 | 193.2 |
-| Compact 7 tables, 14,000 trades | 13.2 | 15.4 |
+| write() | 18294 | 18226 to 18433 | 190.9 | 818.5 | 1236.8 | 2032452.8 | 3206348.2 | 3157021 to 3292963 |
+| io_uring | 10285 | 9620 to 10480 | 91.4 | 2998.6 | 5087.3 | 22.0 | 532.1 | 444 to 619 |
 
 ### Replication
 
@@ -161,9 +118,9 @@ Median of 11 runs. Writing includes fsync and rename. One thread, nothing else r
 
 | Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
 |---|---|---|---|---|---|---|---|---|
-| no replication | 2000 | 2000 to 2000 | 122.5 | 403.0 | 935.5 | 41.3 | 280.2 | 84 to 327 |
-| --replicate, no follower | 2000 | 2000 to 2000 | 122.5 | 423.0 | 895.7 | 44.3 | 295.7 | 160 to 350 |
-| with a follower | 2000 | 1996 to 2000 | 161.6 | 488.0 | 1121.5 | 41.5 | 298.8 | 185 to 1506 |
+| no replication | 2000 | 2000 to 2000 | 153.2 | 508.2 | 1036.2 | 47.9 | 317.8 | 287 to 385 |
+| --replicate, no follower | 2000 | 2000 to 2000 | 143.4 | 489.1 | 1057.5 | 46.0 | 309.3 | 160 to 539 |
+| with a follower | 2000 | 1991 to 2000 | 170.6 | 506.8 | 1301.8 | 46.1 | 372.6 | 155 to 464 |
 
 with a follower: the follower had every order 1 ms after the last ack (median; includes waiting for its own matcher to finish).
 
@@ -171,10 +128,37 @@ with a follower: the follower had every order 1 ms after the last ack (median; i
 
 | Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
 |---|---|---|---|---|---|---|---|---|
-| no replication | 18310 | 18195 to 18478 | 195.3 | 813.0 | 1232.8 | 2001147.8 | 3185621.5 | 3023626 to 3385397 |
-| with a follower | 12279 | 12234 to 12331 | 283.9 | 1212.4 | 1830.5 | 1178.7 | 7033.7 | 5381 to 49651 |
+| no replication | 17327 | 16821 to 18005 | 204.7 | 868.8 | 1310.7 | 2091413.2 | 3315111.0 | 3022408 to 3363281 |
+| with a follower | 11872 | 11780 to 12036 | 292.9 | 1262.1 | 1904.5 | 1002.1 | 5189.6 | 4185 to 8494 |
 
 with a follower: the follower had every order 1 ms after the last ack (median; includes waiting for its own matcher to finish).
+
+### Queue
+
+4 connections, 30000 orders per run, 9 runs per configuration, paced at 2000 orders/s in total. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| lock-free list | 2000 | 2000 to 2000 | 137.1 | 449.4 | 904.8 | 47.0 | 281.2 | 112 to 325 |
+| elastic ring | 2000 | 1999 to 2000 | 138.2 | 483.2 | 879.5 | 45.7 | 297.6 | 109 to 322 |
+
+4 connections, 200000 orders per run, 5 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| lock-free list | 17587 | 17382 to 17847 | 196.7 | 851.9 | 1283.6 | 2086340.7 | 3218754.3 | 2857762 to 3390232 |
+| elastic ring | 17823 | 16857 to 18172 | 198.4 | 825.6 | 1257.1 | 2054699.6 | 3245896.7 | 2967809 to 3419874 |
+
+### SSTable and compaction writes: normal path vs io_uring
+
+Median of 11 runs. Writing includes fsync and rename. One thread, nothing else running. O_DIRECT on this file system: used.
+
+| Operation | Normal write (ms) | io_uring (ms) |
+|---|---|---|
+| Write 10,000 trades | 6.9 | 9.3 |
+| Write 1,000,000 trades | 164.4 | 215.2 |
+| Compact 7 tables, 14,000 trades | 13.1 | 15.0 |
+
 
 ## TickForge database vs MySQL
 

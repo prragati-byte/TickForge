@@ -98,7 +98,7 @@ struct Options {
   std::string wal_path;
   int64_t max_qty = 10000;
   int64_t band_pct = 20;
-  bool pin = true;   // pin the matching thread to one core (--no-pin turns it off)
+  bool pin = false;  // pin the matching thread to one core (--pin turns it on)
   int pin_core = -1; // -1: choose automatically
   bool elastic_queue = false; // ElasticRing instead of MPSCQueue
   size_t ring_size = 1 << 16;
@@ -106,7 +106,6 @@ struct Options {
   bool replicate = false;    // leader: serve WAL frames to followers
   std::string follow_host;   // follower: read-only copy of this leader
   int follow_port = 0;
-  bool pin_chosen = false;   // --pin, --no-pin or --pin-core was given
 };
 
 // ---- small helpers ----------------------------------------------------------
@@ -931,7 +930,6 @@ static bool parse_args(int argc, char **argv, Options &opt) {
     std::string a = argv[i];
     if (a == "--pin" || a == "--no-pin") {
       opt.pin = a == "--pin";
-      opt.pin_chosen = true;
       continue;
     }
     if (a == "--replicate") {
@@ -956,7 +954,6 @@ static bool parse_args(int argc, char **argv, Options &opt) {
       opt.ring_size = static_cast<size_t>(n);
     } else if (a == "--pin-core") {
       opt.pin = true;
-      opt.pin_chosen = true;
       opt.pin_core = std::atoi(v.c_str());
     } else if (a == "--follow") {
       size_t colon = v.rfind(':');
@@ -970,8 +967,6 @@ static bool parse_args(int argc, char **argv, Options &opt) {
     }
     else return false;
   }
-  // A follower usually shares a machine with its leader; both on one core would hurt.
-  if (opt.follow_port != 0 && !opt.pin_chosen) opt.pin = false;
   if (opt.follow_port != 0 && opt.replicate) return false; // no chains: not tested
   return !opt.wal_path.empty() && opt.port > 0 && opt.port < 65536 && opt.max_qty > 0 &&
          opt.band_pct > 0;

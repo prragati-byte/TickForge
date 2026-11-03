@@ -97,7 +97,7 @@ export const COMPONENTS: Component[] = [
   {
     id: "future",
     name: "Storage not built yet",
-    responsibility: "fsync / group commit for the engine log, snapshots, an atomic MemTable swap, a per-table id index for get_trade, compaction throttled by queue depth, Rust-side benchmarks and a B+tree baseline benchmark.",
+    responsibility: "fsync / group commit for the engine log, snapshots, an atomic MemTable swap, a per-table id index for get_trade, compaction throttled by queue depth, read benchmarks and a B+tree baseline benchmark.",
     problem: "Durability across a power cut, faster recovery, and no compaction spikes on the matching path.",
     talksTo: "—",
     status: "planned",

@@ -336,10 +336,11 @@ do_bench() {
     echo "## Results"
     echo
     cat "$out"
-    if [ -f "$ROOT/docs/benchmarks/mysql.md" ]; then
+    # Results from other runs: the MySQL baseline and the first run.
+    for extra in "$ROOT"/docs/benchmarks/*.md; do
       echo
-      cat "$ROOT/docs/benchmarks/mysql.md"
-    fi
+      cat "$extra"
+    done
   } > "$file"
   echo "Wrote $file"
 }
@@ -357,7 +358,7 @@ server_benchmarks() {
   echo
   echo "### Core pinning"
   echo
-  "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 15 --config "unpinned=--no-pin" --config "pinned=--pin"
+  "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 30 --config "unpinned=--no-pin" --config "pinned=--pin"
   echo
   "${sb[@]}" --conns 4 --orders 200000 --runs 7 --config "unpinned=--no-pin" --config "pinned=--pin"
   echo

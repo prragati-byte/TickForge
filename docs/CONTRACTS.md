@@ -80,9 +80,9 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 
 ### Thread placement
 
-- `--pin` (default): the matching thread runs on one core and every other thread is kept off it. The core is the last one this process may use (`taskset` and cgroup limits are respected). Its SMT sibling is kept free too, when at least 4 CPUs are available. With fewer than 2 CPUs, or on an OS other than Linux, the server runs unpinned.
-- `--no-pin`: leave placement to the scheduler.
-- `--pin-core N`: choose the matcher's core. A core this process may not use is a startup error (exit code 2).
+- `--no-pin` (default): leave placement to the scheduler.
+- `--pin`: the matching thread runs on one core and every other thread is kept off it. The core is the last one this process may use (`taskset` and cgroup limits are respected). Its SMT sibling is kept free too, when at least 4 CPUs are available. With fewer than 2 CPUs, or on an OS other than Linux, the server runs unpinned.
+- `--pin-core N`: pin, and choose the matcher's core. A core this process may not use is a startup error (exit code 2).
 
 ### Queue
 
@@ -111,7 +111,7 @@ Off by default. A leader started with `--replicate` serves its WAL; a server sta
 - A follower rejects `new_order` and `cancel` with `read_only` and answers `book`, `stats` and `state_hash`. If the connection drops it retries every 100 ms and continues from its own WAL.
 - There is no automatic failover. To promote a follower, restart it on the same WAL without `--follow`.
 - With either flag, `stats` also has `role` (`leader` or `follower`), and `replicas` on a leader, `leader_connected` and `damaged_frames` on a follower.
-- A follower does not pin by default, so that it does not share the leader's core on one machine. On a shared machine, give each node its own `--pin-core` if you want both pinned.
+- If a leader and a follower share a machine and both should be pinned, give each its own `--pin-core`. With plain `--pin` they would both choose the same core.
 
 ### Rules
 

@@ -118,8 +118,9 @@ static void test_server(const char *exe) {
   std::string dir = mkdtemp(tmpl);
   int port = 20000 + getpid() % 20000;
 
-  { // --no-pin: every thread keeps the CPUs the process started with
-    pid_t server = start_server(exe, port, dir + "/a.wal", {"--no-pin"});
+  // The default and --no-pin: every thread keeps the CPUs the process started with.
+  for (const std::vector<std::string> &flags : {std::vector<std::string>{}, std::vector<std::string>{"--no-pin"}}) {
+    pid_t server = start_server(exe, port, dir + "/a.wal", flags);
     CHECK(wait_for_port(port));
     auto threads = thread_cpus(server);
     CHECK(threads.count("tf-matcher") == 1);
@@ -127,8 +128,8 @@ static void test_server(const char *exe) {
     stop(server);
   }
 
-  { // the default, the same as --pin: the matcher has one CPU and nothing else may run there
-    pid_t server = start_server(exe, port, dir + "/b.wal", {});
+  { // --pin: the matcher has one CPU and nothing else may run there
+    pid_t server = start_server(exe, port, dir + "/b.wal", {"--pin"});
     CHECK(wait_for_port(port));
     auto threads = thread_cpus(server);
     auto m = threads.find("tf-matcher");
