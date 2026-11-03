@@ -50,25 +50,27 @@ On a 12-processor SGI Challenge, the authors report that their non-blocking queu
   hazard pointers and a single consumer.
 
 ## Where in our code
-- `matching-engine/include/lock_free_queue.hpp` — class `MPSCQueue`, functions `enqueue()` and `dequeue()`.
-- Used by `matching-engine/include/matching_engine.hpp` (`MatchingEngine::submit()` and `run()`).
+- `engine/include/lock_free_queue.hpp` — class `MPSCQueue`, functions `enqueue()` and `dequeue()`.
+- Used by `engine/src/engine_server.cpp`: connection threads enqueue, the matching thread dequeues.
 
 ## How we verified it
-- `matching-engine/tests/queue_stress_test.cpp`: 8 producers × 200,000 messages = 1.6 million messages,
-  1 consumer. Checks that nothing is lost, nothing is duplicated, and each producer's messages arrive in
-  the order they were sent.
-- Passes as a normal build, under ThreadSanitizer and under AddressSanitizer (Linux).
+- `engine/tests/queue_stress_test.cpp`: several producers and one consumer. Checks that nothing is lost,
+  nothing is duplicated, and each producer's messages arrive in the order they were sent.
+- It runs as part of `ctest` as a normal build, under ThreadSanitizer and under AddressSanitizer
+  (all pass in `./build.sh test`).
 
 ## Result
-Correctness: the stress test passes. Re-run on Linux on 16 Oct 2026: plain build `PASS received=1600000/1600000`;
-ThreadSanitizer and AddressSanitizer builds (100,000 messages per producer) `PASS received=800000/800000`, no reports.
-Throughput and latency against a mutex queue: **not measured yet**. `benchmarks/lockfree_vs_mutex_bench.cpp`
-is still empty. The paper's own two-lock queue is a natural baseline for that benchmark.
+Correctness: the stress test passes in all three builds.
+Throughput against a mutex queue (`docs/BENCHMARKS.md`, one machine, threads not pinned, 200,000 items per
+producer): the lock-free queue did **not** win. With 1 producer it ran 2.07 vs 2.85 M items/s, with 4
+producers 3.70 vs 4.99, and with 8 producers 2.41 vs 3.66. Its enqueue P99 was lower at 4 producers
+(3920 vs 20564 ns) and at 8 (26537 vs 45319 ns), but its P50 was higher. The paper's own two-lock queue
+is not in the benchmark.
 
 ## Limits and trade-offs
 - Every enqueue calls `new`: a heap allocation on the hot path (a pre-allocated pool is planned).
 - Lock-free, not wait-free: under heavy contention a producer can retry its CAS many times. CAS retries
   are not counted yet.
-- At most 64 producer threads over the program's whole life: a thread's hazard slot is never reused, so
-  short-lived producer threads use up slots. The program aborts cleanly when they run out.
+- At most 128 threads at a time: hazard slots come from a pool and return to it when a thread ends. The
+  129th thread aborts with a message instead of corrupting memory.
 - Unbounded: a burst can grow memory without limit; there is no back-pressure.

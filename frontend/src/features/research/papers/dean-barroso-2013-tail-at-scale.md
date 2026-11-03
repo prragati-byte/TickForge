@@ -38,21 +38,25 @@ histogram.
 - Our percentiles come from a power-of-two histogram, so they are **bucket upper bounds**, not exact values.
 
 ## Where in our code
-- `matching-engine/src/telemetry_main.cpp` — 18 buckets: bucket 0 is below 1 µs, bucket *i* covers
-  2^(*i*−1) to 2^*i* µs, and the last bucket catches everything from 65,536 µs up. `percentile_us()` returns
-  the upper bound of the bucket that contains the percentile.
-- `frontend/src/App.tsx` — the Latency Histogram panel.
+- `engine/src/engine_server.cpp` — a 16-bucket histogram in microseconds (`<1, <2, <4, ... >=16384`),
+  plus p50 and p99 over the last 65,536 orders. The time measured runs from "pushed onto the queue" to
+  "matching finished" and leaves out socket writes. The engine sends them in its `stats` reply.
+- `engine/bench/engine_bench.cpp` — measures the time inside `enqueue()` for a lock-free and a mutex
+  queue, and the time per operation for the two order books, and reports P50 and P99.
+- The Latency Histogram panel in the dashboard.
 
 ## How we verified it
-Not verified by a test yet. There is no unit test for `percentile_us()`.
+There is no dedicated unit test for the engine's percentile code; the end-to-end test only checks that
+the `stats` reply has its fields. The benchmark results are in `engine/bench/last_run.md`.
 
 ## Result
-We do **not** quote latency numbers as results yet: they depend on the machine and the speed setting, and
-there is no baseline to compare against.
+The first benchmark run (`docs/BENCHMARKS.md`, one machine, threads not pinned) reports enqueue P99 for
+the lock-free queue against a mutex queue: 1692 vs 2254 ns at 2 producers, 3920 vs 20564 ns at 4, and
+26537 vs 45319 ns at 8. The 2-producer difference is small and not reliable in this run. The lock-free
+queue's P50 was higher at every producer count, and its raw throughput was lower, so the tail is the
+only place it came out ahead.
 
 ## Limits and trade-offs
-- A reported p99 of 64 µs means "between 32 and 64 µs".
-- Anything at or above 65,536 µs is reported as 131,072 µs, so a one-second stall would show as about 131 ms.
+- The histogram buckets give upper bounds: a reported p99 of 64 µs means "between 32 and 64 µs".
 - No p99.9 or p99.99 yet; those need far more samples and finer buckets.
-- The measured latency is queue-to-match time on the matching thread; it includes time the matcher spends
-  in `std::this_thread::yield()` when the queue is empty.
+- The benchmark is one machine and one run, so treat the numbers as a first look, not a conclusion.

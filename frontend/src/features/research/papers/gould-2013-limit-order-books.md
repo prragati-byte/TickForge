@@ -38,25 +38,29 @@ As a survey, the paper reports that price-time priority is by far the most commo
 
 ## What we changed or rejected
 - Rejected pro-rata matching (it suits some futures markets, not an equity-style book).
-- Not built yet: market orders, cancel and modify.
-- Gould et al. define prices as whole multiples of a **tick size**. We still use `double` prices, which
-  can produce rounding surprises. Integer ticks are on the open-issues list.
-- `symbol_id` is ignored: every order goes into one book (one synthetic instrument).
+- Not built: market orders and modify. Limit orders and cancel are supported.
+- Gould et al. define prices as whole multiples of a **tick size**. We use integer cents (`int64`), so
+  prices are exact; the tick is one cent.
+- One book per symbol; the engine accepts symbol ids 1 to 1000 and trades 30 symbols.
 
 ## Where in our code
-- `matching-engine/include/order_book.hpp` — bids in `std::map<double, std::deque<Order>, std::greater<double>>`,
-  asks in `std::map<double, std::deque<Order>>`. The map gives price order, the deque gives time order.
-- `matching-engine/src/order_book.cpp` — `OrderBook::match()` and `insert_resting()`.
+- `engine/include/map_book.hpp` — the `std::map` book, the one the server uses. The map gives price
+  order, a FIFO queue per price level gives time order.
+- `engine/include/dense_book.hpp` — a cache-aligned array with one level per cent, behind the same
+  interface. It only accepts a fixed price range.
 
 ## How we verified it
-**Not verified by a dedicated test yet.** The book is exercised by the telemetry engine and watched in the
-dashboard, but there is no unit test with hand-worked orders. Planned: a test that checks partial fills,
-time priority at one price level and the trade price.
+`engine/tests/order_book_tests.cpp` checks partial fills (the rest of the resting order stays and the
+trade prints at its price), price priority, time priority at one price level and cancel. It also feeds
+the same random orders to both books and checks that trades and the state hash are identical.
+`engine/tests/engine_e2e_test.cpp` checks the same rules through the TCP server.
 
 ## Result
-Not applicable (a correctness property, not a performance one).
+Correctness: the tests pass. For speed, `engine/bench/last_run.md` (1,000,000 operations, one thread):
+dense book 14.82 M ops/s (P50 84 ns, P99 347 ns) against 10.12 M ops/s (P50 114 ns, P99 402 ns)
+for the map book. One machine, threads not pinned.
 
 ## Limits and trade-offs
-- `std::map` plus `std::deque` means pointer chasing on the hottest path. A dense, cache-aligned array of
-  price levels indexed by tick is planned (differentiator 3 in our plan).
-- Doubles as map keys: two prices that should be equal can differ in the last bit.
+- The server still uses the `std::map` book, which chases pointers on the hottest path, because the
+  dense book cannot take arbitrary prices.
+- The benchmark prices stay within ±10 cents of a drifting mid price, which suits the dense book.

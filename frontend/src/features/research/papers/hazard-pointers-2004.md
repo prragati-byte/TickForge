@@ -38,34 +38,36 @@ The author reports that hazard pointers bound the number of removed-but-not-yet-
 
 ## What we changed or rejected
 - **Only one thread retires.** Only the single consumer removes nodes, so the retired list is a plain
-  vector owned by the consumer: no sharing, and it can grow without limit instead of sitting in a
-  fixed array.
+  vector owned by the consumer: no sharing, and it grows as needed instead of sitting in a fixed array
+  (the first version used a fixed 1,024-slot array, which could overflow).
 - **Only producers publish hazards.** The consumer is the only thread that frees nodes, so it never
   needs to protect itself from itself.
 - **seq_cst ordering** on publishing and scanning. The publish (a store) must be visible before the
   re-check (a load); weaker orderings allow the two to be reordered.
-- **Naive scan.** The paper suggests a hash set of hazard pointers so a scan costs O(R + H). We compare
-  every retired node against every slot, O(R × H). With R = 64 and H ≤ 64 this is simple and small,
-  but it is a known trade-off.
+- **Naive scan, in batches.** The paper suggests a hash set of hazard pointers so a scan costs O(R + H). We compare
+  every retired node against every slot, O(R × H), but only once per 64 retirements. This is simple and
+  small, but it is a known trade-off.
 
 ## Where in our code
-`matching-engine/include/lock_free_queue.hpp` — `hazard_` (the slots), `thread_slot()`, `retired_`,
-`is_hazardous()`, `reclaim()`, `RECLAIM_THRESHOLD`, and the validation loop in `enqueue()`.
+`engine/include/lock_free_queue.hpp` — the hazard slots, the per-thread slot pool, the retired vector,
+the scan that frees unprotected nodes, and the validation loop in `enqueue()`.
 
 ## How we verified it
 - The queue stress test (see [[michael-scott-1996]]) under AddressSanitizer reports no use-after-free,
-  and under ThreadSanitizer reports no data race (sanitizer builds: 8 producers × 100,000 = 800,000 messages).
-- Honest note: the first version had a reclamation bug (a fixed retire array that was never reset, so
-  after 1024 dequeues nodes were freed without checking hazards). We fixed it by reasoning about the
-  algorithm. We **did not manage to reproduce** the old bug in a test.
+  and under ThreadSanitizer reports no data race. Both run as part of `ctest` (`./build.sh test`).
+- A code audit of the queue found and fixed four issues (details in `docs/DECISIONS.md`):
+  a possible use-after-free of the old head (the consumer now moves `tail` first), the memory ordering of
+  the hazard publish and scan (now `seq_cst`), hazard slots shared once more than 64 threads had enqueued
+  (now a pool of 128 slots that aborts when exceeded), and the fixed retire array (now a vector scanned in batches).
+- Honest note: these were found by reading the code. The stress test passed on the old queue too, so we
+  **did not manage to reproduce** the old bugs in a failing test.
 
 ## Result
-No use-after-free or race found by the sanitizers on 800,000 messages (the plain build runs 1.6 million).
-Reclamation cost:
-**not measured yet**.
+No use-after-free or race found by the sanitizers in the stress test. Reclamation cost is not measured on
+its own. The queue as a whole is slower than a mutex queue on raw throughput (`docs/BENCHMARKS.md`).
 
 ## Limits and trade-offs
 - Sanitizers only find bugs on the interleavings that actually happen in a run; they are not a proof.
 - The O(R × H) scan grows with the number of producer threads.
-- Slots are handed out once per thread and never reused, so the 64-slot limit counts every thread that
-  ever enqueued during the program's life (shared by all queues of the same element type).
+- At most 128 threads can use the queue at the same time; the 129th aborts with a message instead of
+  corrupting memory. Slots go back to the pool when a thread ends.

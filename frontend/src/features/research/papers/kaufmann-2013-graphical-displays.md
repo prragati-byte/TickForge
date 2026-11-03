@@ -29,20 +29,23 @@ risk-return profile better, and were not more dissatisfied with the outcomes aft
 The authors report that participants allocated more to the risky fund with experience sampling and with the combined risk tool; with the risk tool they also perceived less risk, estimated the probability of loss more accurately, and were not more dissatisfied with their returns later.
 
 ## What we took
-The way a price chart is drawn is not cosmetic: it changes how risky an asset feels. The Journey chart now
-has a **Linear / Log** scale switch, and MAX opens on a log scale, where equal heights mean equal percentage
-moves. On a linear scale, decades of growth make every early fall look flat and every recent wobble look huge.
+The way a price chart is drawn is not cosmetic: it changes how risky an asset feels. Two things follow in the app. The Y-axis of
+the market chart is **scaled to the volatility** of the series by default (with a "Fit to data" switch), and the Journey chart has a **Linear / Log**
+scale switch (on a log scale equal heights mean equal percentage moves). The order ticket also shows a
+**scenario preview** before an order is confirmed: a histogram of how past holding periods of the chosen
+length ended.
 
 ## What we changed or rejected
-- We did not build their risk tool or experience sampling. The planned "scenario visualizer before an
-  order" is the closer match.
-- The planned "smart Y-axis scaled from volatility" is not built. A log scale is a simpler, standard choice.
+- We did not build their risk tool or experience sampling. The scenario preview is the closest match: it
+  shows a spread of past outcomes at once, not drawn one by one.
 
 ## Where in our code
-`frontend/src/Journey.tsx` — the `log` prop of `JourneyChart` and the Price scale buttons.
+- `frontend/src/lib/behavior.ts` — `volatilityAxis()` and `scenarioOutcomes()`.
+- `frontend/src/features/dashboard/OrderTicket.tsx` — the scenario preview.
+- `frontend/src/features/journey/Journey.tsx` — the Linear / Log switch.
 
 ## How we verified it
-Not verified with users.
+`frontend/src/lib/behavior.test.ts` tests `volatilityAxis()` and `scenarioOutcomes()`. Not verified with users.
 
 ## Result
 **No claim** about behaviour; this is a design choice informed by the paper.

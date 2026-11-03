@@ -14,4 +14,4 @@ order: 240
 ---
 
 ## Why it matters for TickForge
-A pre-allocated ring buffer avoids the per-message heap allocation our linked-list queue does today, and pads counters onto separate cache lines. A candidate for the elastic ingestion and object-pool work. Not built yet.
+A pre-allocated ring buffer avoids the per-message heap allocation our linked-list queue does today, and pads counters onto separate cache lines. A candidate for the elastic ingestion and object-pool work. Not built yet. In the benchmark (`docs/BENCHMARKS.md`) the linked-list queue was slower than a mutex queue on raw throughput; whether a ring buffer would change that is untested. Today only the dense order book's price levels are cache-line aligned.

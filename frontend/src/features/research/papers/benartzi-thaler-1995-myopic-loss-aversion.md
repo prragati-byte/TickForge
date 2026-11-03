@@ -8,7 +8,7 @@ area: behavioral
 status: partial
 reviewed: false
 citationVerified: true
-summary: How often you look at returns changes how risky an investment feels. Basis for the Journey ranges.
+summary: How often you look at returns changes how risky an investment feels. Basis for the evaluation windows and Journey ranges.
 seeAlso: kaufmann-2013-graphical-displays
 order: 110
 ---
@@ -31,23 +31,25 @@ In the authors' simulations, the size of the historical equity premium is consis
 
 ## What we took
 The evaluation window matters: the same asset looks frightening day by day and much calmer over years. So
-the Journey view lets you look at one stock over 1D, 5D, 1M, 6M, 1Y and **MAX**, and MAX shows calendar-year
-returns and how long each big fall took to recover.
+the market panel has a **Daily / 30 days / 1 year** toggle that shows the window's return next to its worst fall,
+and the Journey view lets you look at one stock over its ranges up to 1Y.
 
 ## What we changed or rejected
-- The paper is about evaluating a whole portfolio. Our Journey view is about one stock's history.
-- The planned feature closest to the paper, a "daily noise vs long-term growth" toggle on the **user's own
-  profit and loss**, needs the paper-trading ledger, which is not built.
+- The paper is about evaluating a whole portfolio. Our windows apply to one stock's price history.
+- The feature closest to the paper, a "daily noise vs long-term growth" toggle on the **user's own
+  profit and loss**, is not built. The 24 virtual traders do have paper-money P&L, but the toggle does not use it.
+- The market-data MAX range is not available, so the MAX button is hidden.
 
 ## Where in our code
-- `frontend/src/Journey.tsx` — `RANGES` (including MAX) and the Since listing panel (`SinceListing`).
-- `market-data/journey.py` — `compute_long_term()`: calendar-year returns, drawdown episodes with recovery
-  times, CAGR.
+- `frontend/src/features/market/MarketSection.tsx` — the evaluation-window toggle.
+- `frontend/src/lib/behavior.ts` — `periodReturnPct()` and `maxDrawdownPct()`.
+- `frontend/src/features/journey/Journey.tsx` and `services/market-data/app/journey.py` — the Journey ranges
+  and analytics.
 
 ## How we verified it
-The analytics are covered by tests with hand-calculated values in `market-data/test_journey.py`
-(for example the drawdown episodes and partial-year handling). This checks the numbers, not the
-behavioural effect.
+`frontend/src/lib/behavior.test.ts` tests the return and drawdown calculations, and
+`services/market-data/tests/test_journey.py` tests the Journey analytics with hand-calculated values.
+This checks the numbers, not the behavioural effect.
 
 ## Result
 No user study, so **no claim** that TickForge changes anyone's behaviour.
