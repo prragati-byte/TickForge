@@ -1,4 +1,5 @@
 #include "wal.hpp"
+#include "uring.hpp"
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -159,14 +160,23 @@ WalRecovery wal_recover(const std::string &path,
 
 // ---- writer -------------------------------------------------------------
 
-WalWriter::WalWriter(const std::string &path) {
+WalWriter::WalWriter(const std::string &path, WalIo io) {
   fd_ = ::open(path.c_str(), O_WRONLY | O_APPEND);
   if (fd_ < 0) throw std::runtime_error("cannot open WAL " + path + ": " + std::strerror(errno));
+  if (io == WalIo::Uring) {
+    try {
+      uring_ = std::make_unique<UringWriter>();
+    } catch (...) {
+      ::close(fd_);
+      throw;
+    }
+  }
 }
 
 WalWriter::~WalWriter() { ::close(fd_); }
 
 void WalWriter::append(const WalRecord &r) {
   std::string frame = wal_encode_frame(r);
-  write_all(fd_, frame.data(), frame.size());
+  if (uring_) uring_->write_all(fd_, frame.data(), frame.size());
+  else write_all(fd_, frame.data(), frame.size());
 }

@@ -101,7 +101,7 @@ export const SYSTEM_PROBLEMS: Problem[] = [
   {
     title: "OS scheduling and network-stack jitter",
     text: "The scheduler, the kernel network stack and the page cache add jitter to P99 and P99.99.",
-    today: "The matching thread is pinned to one core (the measured difference is inside the run-to-run spread on this virtual machine). Orders still arrive over a local TCP socket (127.0.0.1:9100), not a real network; io_uring and XDP are future work.",
+    today: "The matching thread is pinned to one core (the measured difference is inside the run-to-run spread on this virtual machine). Orders still arrive over a local TCP socket (127.0.0.1:9100), not a real network. io_uring is built but off by default because it measured slower here; XDP is future work.",
     status: "partial",
   },
 ];

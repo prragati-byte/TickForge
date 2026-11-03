@@ -2,7 +2,7 @@
 //!
 //! Errors: bad arguments raise ValueError, file problems raise OSError.
 
-use crate::{Database, DbError, Trade};
+use crate::{Database, DbError, IoBackend, Trade};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -43,7 +43,16 @@ struct PyTickForgeDB {
 impl PyTickForgeDB {
     #[new]
     fn new(path: &str) -> PyResult<Self> {
-        let db = Database::open(Path::new(path)).map_err(to_py_err)?;
+        let io = match std::env::var("TICKFORGE_DB_IO").as_deref() {
+            Err(_) | Ok("") | Ok("standard") => IoBackend::Standard,
+            Ok("uring") => IoBackend::Uring,
+            Ok(other) => {
+                return Err(PyValueError::new_err(format!(
+                    "TICKFORGE_DB_IO must be standard or uring, not {other}"
+                )))
+            }
+        };
+        let db = Database::open_with(Path::new(path), io).map_err(to_py_err)?;
         Ok(PyTickForgeDB { db })
     }
 

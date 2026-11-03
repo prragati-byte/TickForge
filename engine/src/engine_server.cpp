@@ -3,6 +3,7 @@
 //   engine_server --port 9100 --wal data/engine.wal [--max-qty 10000] [--band-pct 20]
 //                 [--pin | --no-pin] [--pin-core N]
 //                 [--queue lockfree|elastic] [--ring-size 65536]
+//                 [--wal-io write|uring]
 //
 // Protocol: one JSON object per line (see docs/CONTRACTS.md, section 2).
 //
@@ -20,6 +21,7 @@
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
 #include "replay.hpp"
+#include "uring.hpp"
 #include "wal.hpp"
 
 #include <algorithm>
@@ -91,6 +93,7 @@ struct Options {
   int pin_core = -1; // -1: choose automatically
   bool elastic_queue = false; // ElasticRing instead of MPSCQueue
   size_t ring_size = 1 << 16;
+  WalIo wal_io = WalIo::Write;
 };
 
 // ---- small helpers ----------------------------------------------------------
@@ -173,7 +176,7 @@ public:
     if (opt_.elastic_queue) ring_ = std::make_unique<ElasticRing<Job>>(opt_.ring_size);
     WalRecovery r = recover_exchange(opt_.wal_path, ex_);
     seq_ = r.last_seq;
-    wal_ = std::make_unique<WalWriter>(opt_.wal_path);
+    wal_ = std::make_unique<WalWriter>(opt_.wal_path, opt_.wal_io);
     std::fprintf(stderr, "engine: recovered %llu records, last_seq %llu, dropped %llu bytes\n",
                  (unsigned long long)r.records, (unsigned long long)r.last_seq,
                  (unsigned long long)r.dropped_bytes);
@@ -668,6 +671,9 @@ static bool parse_args(int argc, char **argv, Options &opt) {
     else if (a == "--queue") {
       if (v != "lockfree" && v != "elastic") return false;
       opt.elastic_queue = v == "elastic";
+    } else if (a == "--wal-io") {
+      if (v != "write" && v != "uring") return false;
+      opt.wal_io = v == "uring" ? WalIo::Uring : WalIo::Write;
     } else if (a == "--ring-size") {
       long long n = std::atoll(v.c_str());
       if (n < 2 || n > (1LL << 30)) return false;
@@ -688,13 +694,20 @@ int main(int argc, char **argv) {
     std::fprintf(stderr,
                  "usage: engine_server --wal <file> [--port 9100] [--max-qty 10000] "
                  "[--band-pct 20] [--pin | --no-pin] [--pin-core N] "
-                 "[--queue lockfree|elastic] [--ring-size 65536]\n");
+                 "[--queue lockfree|elastic] [--ring-size 65536] [--wal-io write|uring]\n");
     return 2;
   }
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
   std::signal(SIGPIPE, SIG_IGN);
   try {
+    if (opt.wal_io == WalIo::Uring) {
+      std::string why;
+      if (!UringWriter::supported(&why)) { // asked for by name, so do not quietly use something else
+        std::fprintf(stderr, "engine: --wal-io uring is not available here: %s\n", why.c_str());
+        return 2;
+      }
+    }
     tf_affinity::PinPlan plan;
     if (opt.pin) {
       plan = tf_affinity::make_plan(tf_affinity::allowed_cpus(), opt.pin_core, tf_affinity::smt_siblings);

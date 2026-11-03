@@ -120,6 +120,41 @@ Items per producer: 200000. One consumer thread. Latency is the time inside `enq
 | elastic ring 2^18 | 176 | 534 | 82.1 | 620704 |
 | elastic ring 2^8 | 225 | 694 | 125.1 | 999744 |
 
+### WAL append alone: write() vs io_uring
+
+200000 frames per run, 5 runs each, taking turns, one thread, no fsync. One frame per system call and the call waits for the result, because the engine must not acknowledge an order before its frame is written. Per-call time includes about 20-30 ns for reading the clock.
+
+| Backend | P50 (ns) | P99 (ns) | P99.9 (ns) | Frames/s |
+|---|---|---|---|---|
+| write() | 528 | 1863 | 4494 | 1370900 |
+| io_uring | 37306 | 69137 | 276793 | 25638 |
+
+### WAL writes, whole server
+
+4 connections, 30000 orders per run, 9 runs per configuration, paced at 2000 orders/s in total. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| write() | 2000 | 2000 to 2000 | 118.4 | 377.3 | 798.3 | 42.7 | 267.2 | 176 to 290 |
+| io_uring | 2000 | 2000 to 2000 | 259.8 | 699.9 | 1189.7 | 37.8 | 196.3 | 159 to 217 |
+
+4 connections, 200000 orders per run, 5 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| write() | 18556 | 16145 to 18851 | 187.5 | 799.0 | 1230.5 | 2017748.0 | 3284530.2 | 3096572 to 4294967 |
+| io_uring | 10480 | 10151 to 10596 | 89.5 | 3027.3 | 5090.1 | 21.7 | 501.3 | 462 to 593 |
+
+### SSTable and compaction writes: normal path vs io_uring
+
+Median of 11 runs. Writing includes fsync and rename. One thread, nothing else running. O_DIRECT on this file system: used.
+
+| Operation | Normal write (ms) | io_uring (ms) |
+|---|---|---|
+| Write 10,000 trades | 6.6 | 8.0 |
+| Write 1,000,000 trades | 160.8 | 193.2 |
+| Compact 7 tables, 14,000 trades | 13.2 | 15.4 |
+
 ## TickForge database vs MySQL
 
 Written by `./build.sh bench-mysql` (`bench/mysql_baseline/`). This compares a narrow job, storing fixed-schema trade records. It says nothing about general database quality: MySQL also provides SQL, secondary indexes, multi-row transactions, replication tooling and backups, and TickForge's database provides none of those.

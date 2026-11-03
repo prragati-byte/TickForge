@@ -18,6 +18,36 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// How SSTable files reach the disk. Both give identical files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IoBackend {
+    /// `write` and `fsync`, through the page cache.
+    #[default]
+    Standard,
+    /// Batched and asynchronous through io_uring, O_DIRECT where the file system allows it.
+    /// Linux only.
+    Uring,
+}
+
+impl IoBackend {
+    /// Can this backend be used here? For `Uring` this really creates a ring, because
+    /// containers and sysctl can block io_uring on a kernel that was built with it.
+    pub fn check(self) -> Result<(), DbError> {
+        match self {
+            IoBackend::Standard => Ok(()),
+            #[cfg(target_os = "linux")]
+            IoBackend::Uring => crate::uring::supported().map_err(DbError::from),
+            #[cfg(not(target_os = "linux"))]
+            IoBackend::Uring => Err(unsupported().into()),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unsupported() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Unsupported, "io_uring only exists on Linux")
+}
+
 const MAGIC: &[u8; 8] = b"TFSST001";
 const FOOTER_LEN: usize = 8 + 6 * 8 + 4;
 const INDEX_EVERY: usize = 64;
@@ -43,6 +73,11 @@ impl SsTable {
     /// Write `trades` (already sorted by (timestamp_ms, trade_id), ids unique)
     /// to `path`. The file appears atomically: written to `path.tmp`, then renamed.
     pub fn write(path: &Path, trades: &[Trade]) -> Result<(), DbError> {
+        Self::write_with(path, trades, IoBackend::Standard)
+    }
+
+    /// The same, choosing how the bytes reach the disk.
+    pub fn write_with(path: &Path, trades: &[Trade], io: IoBackend) -> Result<(), DbError> {
         let mut buf = Vec::new();
         let mut index: Vec<(u64, u64, u64)> = Vec::new();
         let mut bloom = Bloom::with_capacity(trades.len());
@@ -82,9 +117,19 @@ impl SsTable {
         buf.extend_from_slice(&crc.to_le_bytes());
 
         let tmp = path.with_extension("tfs.tmp");
-        let mut file = File::create(&tmp)?;
-        file.write_all(&buf)?;
-        file.sync_all()?;
+        match io {
+            IoBackend::Standard => {
+                let mut file = File::create(&tmp)?;
+                file.write_all(&buf)?;
+                file.sync_all()?;
+            }
+            #[cfg(target_os = "linux")]
+            IoBackend::Uring => {
+                crate::uring::write_file(&tmp, &buf)?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            IoBackend::Uring => return Err(unsupported().into()),
+        }
         fs::rename(&tmp, path)?;
         Ok(())
     }

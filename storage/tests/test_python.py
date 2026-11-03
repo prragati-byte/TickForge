@@ -25,6 +25,39 @@ def insert(db, trade_id, ts, symbol="AAPL", qty=60):
     )
 
 
+class IoBackendSetting(unittest.TestCase):
+    """TICKFORGE_DB_IO chooses how flush and compaction write their files."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(os.environ.pop, "TICKFORGE_DB_IO", None)
+
+    def test_uring_gives_a_database_the_default_can_read(self):
+        os.environ["TICKFORGE_DB_IO"] = "uring"
+        try:
+            db = TickForgeDB(self.tmp.name)
+        except OSError as e:
+            self.skipTest(f"no io_uring here: {e}")
+        for i in range(1, 2001):
+            insert(db, i, 1000 + i)
+        db.flush()
+        for i in range(2001, 4001):
+            insert(db, i, 1000 + i)
+        db.flush()
+        self.assertGreaterEqual(db.compact(), 2)
+        del db
+        del os.environ["TICKFORGE_DB_IO"]
+        db = TickForgeDB(self.tmp.name)
+        self.assertEqual(db.count(), 4000)
+        self.assertEqual(db.get_trade(3333)["trade_id"], 3333)
+
+    def test_unknown_value_is_refused(self):
+        os.environ["TICKFORGE_DB_IO"] = "nonsense"
+        with self.assertRaises(ValueError):
+            TickForgeDB(self.tmp.name)
+
+
 class TickForgeDBSmokeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

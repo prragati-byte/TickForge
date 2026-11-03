@@ -30,3 +30,5 @@ cargo test                   # Rust tests (no Python needed)
 maturin develop --release    # build the module into the active virtualenv
 python -m unittest storage/tests/test_python.py   # Python smoke test (run from the repo root)
 ```
+
+SSTables can be written through io_uring with `TICKFORGE_DB_IO=uring` (or `Database::open_with`). The files are identical; it is off by default because it measured slower, see `docs/DECISIONS.md`. `cargo run --release --example sstable_io_bench -- <dir>` compares the two.

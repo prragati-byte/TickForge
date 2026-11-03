@@ -60,10 +60,11 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | Core pinning (on by default, `--no-pin` to disable, `--pin-core N` to choose) | built, verified | `engine/tests/pinning_test.cpp` reads each thread's allowed CPUs from `/proc`. Pinned vs unpinned in `docs/BENCHMARKS.md`: no regression, and the gain is inside the run-to-run spread on this WSL2 machine |
 | MySQL baseline: the database vs MySQL 8.4 InnoDB, same trades | measured | `./build.sh bench-mysql`, results and settings in `docs/BENCHMARKS.md`. Faster at this one narrow job with the same durability; its P99.99 is no better, and MySQL with fsync is stronger than anything TickForge offers |
 | Elastic dual ring queue (off by default, `--queue elastic`, `--ring-size N`) | built, verified, not the default | `engine/tests/elastic_ring_test.cpp` and the `kill -9` test on the real server, both under ThreadSanitizer and AddressSanitizer. Much faster than the list queue alone; no difference through the whole server, see `docs/BENCHMARKS.md` |
+| io_uring for storage (off by default: `--wal-io uring` for the engine WAL, `TICKFORGE_DB_IO=uring` for SSTables and compaction) | built, verified, not the default | `engine/tests/uring_wal_test.cpp`, `storage/tests/uring_test.rs`: identical bytes, recovery, `kill -9`. Slower on this machine, see `docs/BENCHMARKS.md`, so the normal path stays |
 | Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |
-| Kernel bypass networking, io_uring, multi-node replication | planned | |
+| Kernel bypass networking, multi-node replication | planned | |
 
 ### Behavioural features
 
@@ -76,7 +77,7 @@ These follow the research document. They use real Yahoo price history, not forec
 
 ## Configuration
 
-Defaults work out of the box. See [.env.example](frontend/.env.example) for the frontend addresses. `exchange-api` reads `TICKFORGE_ENGINE_HOST`, `TICKFORGE_ENGINE_PORT`, `TICKFORGE_DATA_DIR` and (tests only) `TICKFORGE_MEMORY_DB`. `./build.sh` passes `TICKFORGE_ENGINE_FLAGS` to the engine, for example `TICKFORGE_ENGINE_FLAGS=--no-pin ./build.sh`.
+Defaults work out of the box. See [.env.example](frontend/.env.example) for the frontend addresses. `exchange-api` reads `TICKFORGE_ENGINE_HOST`, `TICKFORGE_ENGINE_PORT`, `TICKFORGE_DATA_DIR` and (tests only) `TICKFORGE_MEMORY_DB`. The database reads `TICKFORGE_DB_IO` (`standard` or `uring`). `./build.sh` passes `TICKFORGE_ENGINE_FLAGS` to the engine, for example `TICKFORGE_ENGINE_FLAGS=--no-pin ./build.sh`.
 
 ## Repository layout
 

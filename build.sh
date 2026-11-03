@@ -308,8 +308,10 @@ do_bench() {
   say "Running benchmarks (this takes several minutes)"
   local out="$LOGS/bench-output.md"
   mkdir -p "$LOGS"
-  "$bin" | tee "$out"
+  mkdir -p "$RUN/bench"
+  "$bin" "$RUN/bench" | tee "$out"
   server_benchmarks | tee -a "$out"
+  storage_benchmarks | tee -a "$out"
 
   local file="$ROOT/docs/BENCHMARKS.md"
   {
@@ -359,11 +361,25 @@ server_benchmarks() {
   echo
   "${sb[@]}" --conns 4 --orders 200000 --runs 7 --config "unpinned=--no-pin" --config "pinned=--pin"
   echo
+  echo "### WAL writes"
+  echo
+  "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 9 --config "write()=--wal-io write" --config "io_uring=--wal-io uring"
+  echo
+  "${sb[@]}" --conns 4 --orders 200000 --runs 5 --config "write()=--wal-io write" --config "io_uring=--wal-io uring"
+  echo
   echo "### Queue"
   echo
   "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 9 --config "lock-free list=--queue lockfree" --config "elastic ring=--queue elastic"
   echo
   "${sb[@]}" --conns 4 --orders 200000 --runs 5 --config "lock-free list=--queue lockfree" --config "elastic ring=--queue elastic"
+  echo
+}
+
+storage_benchmarks() {
+  echo "### SSTable and compaction writes: normal path vs io_uring"
+  echo
+  ( cd "$ROOT/storage" && cargo run --quiet --release --example sstable_io_bench -- "$RUN/bench/sst" )
+  rm -rf "$RUN/bench/sst"
   echo
 }
 

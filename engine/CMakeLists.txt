@@ -15,7 +15,7 @@ add_compile_options(-Wall -Wextra)
 include_directories(include)
 
 # WAL library: used by the server and the tests.
-add_library(tickforge_wal STATIC src/wal.cpp)
+add_library(tickforge_wal STATIC src/wal.cpp src/uring.cpp)
 
 # The server.
 add_executable(engine_server src/engine_server.cpp)
@@ -39,6 +39,14 @@ add_test(NAME queue_stress_test COMMAND queue_stress_test)
 # Starts engine_server, kills it with SIGKILL, restarts it and compares state hashes.
 add_executable(engine_e2e_test tests/engine_e2e_test.cpp)
 add_test(NAME engine_e2e_test COMMAND engine_e2e_test $<TARGET_FILE:engine_server>)
+
+# The WAL through io_uring: same bytes, same recovery. Exit code 77 means this
+# kernel has no io_uring, and ctest reports that as skipped.
+add_executable(uring_wal_test tests/uring_wal_test.cpp)
+target_link_libraries(uring_wal_test PRIVATE tickforge_wal)
+add_test(NAME uring_wal_test COMMAND uring_wal_test)
+set_tests_properties(uring_wal_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+add_test(NAME engine_e2e_uring COMMAND engine_e2e_test $<TARGET_FILE:engine_server> --wal-io uring)
 
 # The same crash test on the elastic queue. A ring of 2 sends nearly every queued
 # order through the overflow path.
@@ -75,7 +83,7 @@ endforeach()
 # The real server under the sanitizers, on the elastic queue, with the crash test
 # driving it. ctest fails the test if a sanitizer prints anything.
 foreach(san thread address)
-  add_executable(engine_server_${san} src/engine_server.cpp src/wal.cpp)
+  add_executable(engine_server_${san} src/engine_server.cpp src/wal.cpp src/uring.cpp)
   target_compile_options(engine_server_${san} PRIVATE -fsanitize=${san} -O1 -g -fno-omit-frame-pointer)
   target_link_options(engine_server_${san} PRIVATE -fsanitize=${san})
   target_link_libraries(engine_server_${san} PRIVATE Threads::Threads)
@@ -87,7 +95,7 @@ endforeach()
 
 # ---- benchmark (run: ./engine_bench > bench/last_run.md) ---------------------
 add_executable(engine_bench bench/engine_bench.cpp)
-target_link_libraries(engine_bench PRIVATE Threads::Threads)
+target_link_libraries(engine_bench PRIVATE tickforge_wal Threads::Threads)
 target_compile_definitions(engine_bench PRIVATE
   "TF_BUILD_FLAGS=\"-std=c++17 ${CMAKE_CXX_FLAGS_RELEASE}\"")
 

@@ -89,6 +89,11 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 - `--queue lockfree` (default): the linked-list queue.
 - `--queue elastic`: a preallocated ring, with a heap list for what does not fit. `--ring-size N` (default 65536) is rounded up to a power of two. FIFO order and the state hash are the same as with the default. `stats` then also has `ring_capacity` and `ring_overflowed` (items that have ever taken the slow path).
 
+### WAL writes
+
+- `--wal-io write` (default): one `write()` per frame.
+- `--wal-io uring`: one io_uring write per frame, waited for before the ack. Same file, same guarantee. If this kernel or sandbox cannot create a ring, the server stops at startup with exit code 2 instead of using something else.
+
 ### Rules
 
 - Price-time priority. A trade prints at the **resting** order's price. Partial fills leave the remainder resting.
@@ -149,6 +154,8 @@ Rules:
 - `buyer_id` / `seller_id` are the virtual trader ids, 0 if unknown.
 - Errors raise `OSError`; bad arguments raise `ValueError`.
 - SSTable: sorted by `(timestamp_ms, trade_id)`, sparse index every 64 entries, Bloom filter on `trade_id`, CRC-32 footer. Files in the directory are named `sst-<n>.tfs`.
+
+`TICKFORGE_DB_IO=uring` makes flush and compaction write through io_uring (O_DIRECT where the file system allows it). Files are byte-identical to the default `standard`, so a database can be reopened with either setting. Opening raises `OSError` if io_uring is not available and `ValueError` for any other value. The database's own log always uses `write()`.
 
 For tests only: `TICKFORGE_MEMORY_DB=1` makes the Python side use an in-memory stand-in with the same methods. Without it, a failed import of `tickforge_db` is a startup error.
 

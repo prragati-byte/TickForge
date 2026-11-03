@@ -1,5 +1,5 @@
 // Benchmarks. Output is markdown, so it can be pasted into docs:
-//   ./engine_bench > last_run.md
+//   ./engine_bench [directory for WAL files] > last_run.md
 //
 // 1. Queue: MPSCQueue (lock-free) vs std::mutex + std::deque, many producers
 //    and one consumer. Reports throughput (items handed over per second) and
@@ -14,6 +14,8 @@
 #include "elastic_ring.hpp"
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
+#include "uring.hpp"
+#include "wal.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -274,6 +276,59 @@ static void run_book_benchmark() {
             << d.p99_ns << " | " << d.trades << " |\n\n";
 }
 
+// ---- 3. WAL write ---------------------------------------------------------------
+
+static void bench_wal_once(const std::string &path, WalIo io, int frames, std::vector<int64_t> &samples) {
+  std::remove(path.c_str());
+  wal_recover(path, [](const WalRecord &) {});
+  WalWriter w(path, io);
+  for (int i = 1; i <= frames; i++) {
+    WalRecord r;
+    r.seq = r.order_id = r.ts_ms = i;
+    r.symbol_id = 1;
+    r.price = 10000 + i % 100;
+    r.qty = 1 + i % 50;
+    auto s = Clock::now();
+    w.append(r);
+    samples.push_back(ns_since(s));
+  }
+  std::remove(path.c_str());
+}
+
+static void run_wal_benchmark(const std::string &dir) {
+  const int frames = 200000, runs = 5;
+  std::string why;
+  std::cout << "## WAL append: write() vs io_uring\n\n";
+  if (!UringWriter::supported(&why)) {
+    std::cout << "Not run: " << why << "\n\n";
+    return;
+  }
+  std::cout << frames << " frames per run, " << runs << " runs each, taking turns, one thread, no fsync. "
+            << "One frame per system call and the call waits for the result, because the engine must "
+            << "not acknowledge an order before its frame is written. Per-call time includes about "
+            << "20-30 ns for reading the clock.\n\n";
+  std::cout << "| Backend | P50 (ns) | P99 (ns) | P99.9 (ns) | Frames/s |\n|---|---|---|---|---|\n";
+  std::vector<int64_t> plain, uring;
+  double plain_s = 0, uring_s = 0;
+  const std::string path = dir + "/engine_bench.wal";
+  for (int r = 0; r < runs; r++) {
+    auto t0 = Clock::now();
+    bench_wal_once(path, WalIo::Write, frames, plain);
+    plain_s += ns_since(t0) / 1e9;
+    t0 = Clock::now();
+    bench_wal_once(path, WalIo::Uring, frames, uring);
+    uring_s += ns_since(t0) / 1e9;
+  }
+  const double total = static_cast<double>(frames) * runs;
+  auto row = [&](const char *name, std::vector<int64_t> &v, double secs) {
+    std::cout << "| " << name << " | " << percentile(v, 0.50) << " | " << percentile(v, 0.99) << " | "
+              << percentile(v, 0.999) << " | " << fixed(total / secs, 0) << " |\n";
+  };
+  row("write()", plain, plain_s);
+  row("io_uring", uring, uring_s);
+  std::cout << "\n";
+}
+
 // ---- machine description -------------------------------------------------------
 
 static std::string cpu_model() {
@@ -288,7 +343,8 @@ static std::string cpu_model() {
 #define TF_BUILD_FLAGS "unknown"
 #endif
 
-int main() {
+int main(int argc, char **argv) {
+  const std::string wal_dir = argc > 1 ? argv[1] : ".";
   std::cout << "# Benchmark run\n\n";
   std::cout << "- CPU: " << cpu_model() << "\n";
   std::cout << "- Logical cores: " << std::thread::hardware_concurrency() << "\n";
@@ -298,5 +354,6 @@ int main() {
   run_queue_benchmark();
   run_burst_benchmark();
   run_book_benchmark();
+  run_wal_benchmark(wal_dir);
   return 0;
 }

@@ -3,7 +3,13 @@
 // File layout is described in docs/CONTRACTS.md, section 3.
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
+
+class UringWriter;
+
+// How the WAL reaches the kernel. Both give the same file and the same guarantee.
+enum class WalIo { Write, Uring };
 
 struct WalRecord {
   enum Type : uint8_t { NewOrder = 1, Cancel = 2 };
@@ -38,7 +44,9 @@ WalRecovery wal_recover(const std::string &path,
 // Appends frames to the end of the file. Not thread safe: callers lock.
 class WalWriter {
 public:
-  explicit WalWriter(const std::string &path); // file must exist (wal_recover first)
+  // The file must exist (wal_recover first). WalIo::Uring throws if this kernel
+  // cannot create a ring; see UringWriter::supported.
+  explicit WalWriter(const std::string &path, WalIo io = WalIo::Write);
   ~WalWriter();
   WalWriter(const WalWriter &) = delete;
   WalWriter &operator=(const WalWriter &) = delete;
@@ -49,4 +57,5 @@ public:
 
 private:
   int fd_;
+  std::unique_ptr<UringWriter> uring_; // only with WalIo::Uring
 };
