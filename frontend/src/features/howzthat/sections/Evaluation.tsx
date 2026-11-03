@@ -2,7 +2,8 @@ import { EVIDENCE, EXPERIMENTS, type Experiment, RESULTS } from "../content";
 import { Card, Field, Section, scrollToId } from "../parts";
 import { StatusPill, linkClass } from "@/components/Prose";
 
-export const EXP_STATE: Record<Experiment["status"], { label: string; kind: "unverified" | "planned" }> = {
+export const EXP_STATE: Record<Experiment["status"], { label: string; kind: "unverified" | "planned" | "partial" }> = {
+  "first-run": { label: "First run done", kind: "partial" },
   "not-measured": { label: "Not yet measured", kind: "unverified" },
   blocked: { label: "Blocked: prerequisite not built", kind: "planned" },
   optional: { label: "Optional · evaluation planned", kind: "planned" },
@@ -14,10 +15,10 @@ export function Evaluation() {
   return (
     <Section
       id="evaluation"
-      lead="How TickForge's claims should be tested, following the evaluation plan in the research document. No performance experiment has been run yet, so every result cell says so."
+      lead="How TickForge's claims should be tested, following the evaluation plan in the research document. A first benchmark run (docs/BENCHMARKS.md) filled some result cells; the others say they are not yet measured."
     >
       <div>
-        <h3 className="mb-3 text-sm font-semibold text-fg">Evidence that exists today · correctness, not performance</h3>
+        <h3 className="mb-3 text-sm font-semibold text-fg">Evidence that exists today · tests of correctness</h3>
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {EVIDENCE.map((e) => (
             <li key={e.title}>
@@ -29,14 +30,14 @@ export function Evaluation() {
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-xs text-faint">Engine checks re-run on Linux on 16 Oct 2026. The engine has not been built or tested on Windows or macOS.</p>
+        <p className="mt-2 text-xs text-faint">Re-run with ./build.sh test on Linux (WSL2) on 3 Nov 2026. The engine has not been built or tested on Windows or macOS.</p>
       </div>
 
       <div>
         <h3 className="mb-3 text-sm font-semibold text-fg">Results</h3>
         <div className="overflow-x-auto rounded-xl border border-line">
           <table className="w-full min-w-[36rem] text-left text-xs">
-            <caption className="sr-only">Benchmark results; cells are empty until measured</caption>
+            <caption className="sr-only">Benchmark results from docs/BENCHMARKS.md (queue throughput in M items/s, enqueue latency in ns); empty cells are not yet measured</caption>
             <thead className="bg-surface text-xs text-muted">
               <tr>
                 <th scope="col" className="px-3 py-2.5 font-semibold">Metric</th>

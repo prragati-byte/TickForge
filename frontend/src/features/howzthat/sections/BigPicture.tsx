@@ -42,17 +42,17 @@ export function SystemMap() {
     <figure className="rounded-2xl border border-line bg-canvas/50 p-4">
       <figcaption className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <Eyebrow>System map · as built today</Eyebrow>
-        <span className="text-xs text-faint">Dashed = designed in the research document, not built</span>
+        <span className="text-xs text-faint">Dashed = not built, partial = built with a stated part missing</span>
       </figcaption>
       <div className="grid gap-2 lg:grid-cols-[1.6fr_6.5rem_1fr_6.5rem_1fr] [&>*]:min-w-0 lg:items-center">
         <MapBox
           title="Matching engine · C++17"
           sub="engine_server, TCP port 9100"
-          items={["producer threads", "MPSC queue", "matching thread", "order book"]}
+          items={["connection threads", "WAL", "MPSC queue", "matching thread", "order books"]}
           className="lg:col-start-1 lg:row-start-1"
         />
         <div className="lg:col-start-2 lg:row-start-1"><Connector label="TCP :9100 · JSON lines" /></div>
-        <MapBox title="exchange-api · FastAPI" sub="orders, 24 traders, database, live numbers" className="lg:col-start-3 lg:row-start-1" />
+        <MapBox title="exchange-api · FastAPI" sub="orders, 24 traders, live numbers" className="lg:col-start-3 lg:row-start-1" />
         <div className="lg:col-start-4 lg:row-start-1"><Connector label="HTTP + WebSocket :8001" /></div>
         <MapBox title="Browser · React" sub="dashboard and this page" items={["engine panels", "market data", "Journey"]} className="lg:col-start-5 lg:row-span-2 lg:row-start-1 lg:self-stretch" />
         <MapBox title="Yahoo Finance" sub="external price data" className="lg:col-start-1 lg:row-start-2" />
@@ -60,15 +60,15 @@ export function SystemMap() {
         <MapBox title="Market-data API · FastAPI" sub="whitelist · cache · Journey analytics" className="lg:col-start-3 lg:row-start-2" />
         <div className="lg:col-start-4 lg:row-start-2"><Connector label="HTTP :8000" /></div>
         <MapBox
-          title="Durable storage"
-          sub="would hang off the matching thread's trades"
-          items={["WAL", "MemTable", "SSTables", "replay"]}
-          status="planned"
+          title="Trade database · Rust"
+          sub="tickforge_db, used by exchange-api in-process; compaction throttling is planned"
+          items={["MemTable", "SSTables", "Bloom filter", "compaction"]}
+          status="partial"
           className="lg:col-start-1 lg:row-start-3"
         />
       </div>
       <p className="mt-3 text-xs leading-relaxed text-faint">
-        The engine and the market-data API are independent: the engine trades one synthetic instrument (around $150), while the API serves real S&amp;P 500 prices. They are never mixed on one chart.
+        The engine and the market-data API are independent: the engine trades 30 symbols from the virtual traders&apos; orders (paper money), while the API serves real S&amp;P 500 prices. They are never mixed on one chart.
       </p>
     </figure>
   );

@@ -9,7 +9,7 @@ export type Experiment = {
   metric: string;
   procedure: string;
   interpretation: string;
-  status: "not-measured" | "blocked" | "optional";
+  status: "first-run" | "not-measured" | "blocked" | "optional";
   needs: string;
 };
 
@@ -23,8 +23,8 @@ export const EXPERIMENTS: Experiment[] = [
     metric: "Orders per second (median of repeated runs), CAS retries per order.",
     procedure: "Closed-loop producers enqueue a fixed number of orders; one consumer drains; same machine, same build flags, several repetitions.",
     interpretation: "A gap that grows with producer count supports the design; no gap means the queue is not the bottleneck.",
-    status: "not-measured",
-    needs: "benchmarks/lockfree_vs_mutex_bench.cpp exists but is empty; CAS counters are not instrumented.",
+    status: "first-run",
+    needs: "First run done (engine/bench, results in docs/BENCHMARKS.md): the lock-free queue did NOT beat the mutex queue on raw throughput. Still missing: CAS retry counters, repeated runs, other machines.",
   },
   {
     id: "latency",
@@ -35,8 +35,8 @@ export const EXPERIMENTS: Experiment[] = [
     metric: "P50, P99, P99.99 of submit-to-matched time.",
     procedure: "Open-loop load generator at fixed rates; record every sample in a fine-grained histogram.",
     interpretation: "Compare tails, not averages; report the machine and load used.",
-    status: "not-measured",
-    needs: "Today's histogram has power-of-two buckets and the telemetry engine is rate-limited (40 orders/s × speed), so it is monitoring, not a benchmark. Needs an HDR-style histogram and an unthrottled load generator.",
+    status: "first-run",
+    needs: "The benchmark measures the time inside enqueue() (P50 and P99), not order-to-match latency, and the engine's live histogram has power-of-two buckets. Needs an HDR-style histogram for P99.99 and an unthrottled order-to-match load generator.",
   },
   {
     id: "burst",
@@ -71,8 +71,8 @@ export const EXPERIMENTS: Experiment[] = [
     metric: "WAL write latency percentiles; matching P99 during compaction.",
     procedure: "Sustained write load long enough to trigger several compactions.",
     interpretation: "Must be compared against SILK's results and approach.",
-    status: "blocked",
-    needs: "The WAL and storage engine do not exist yet.",
+    status: "not-measured",
+    needs: "The WAL and the database exist, but no experiment times WAL writes or matching latency while a compaction runs. Throttled compaction is not built.",
   },
   {
     id: "replay",
@@ -83,8 +83,8 @@ export const EXPERIMENTS: Experiment[] = [
     metric: "Hash equality of book and trade log; recovery time.",
     procedure: "Kill the engine at random points many times; recover; compare hashes.",
     interpretation: "Any mismatch is a correctness bug, not a performance issue.",
-    status: "blocked",
-    needs: "Needs the WAL, snapshots and replay.",
+    status: "first-run",
+    needs: "Done for process kills: engine/tests/wal_recovery_test.cpp and engine/tests/engine_e2e_test.cpp (kill -9, same state hash after restart). Missing: random crash points repeated many times, recovery time, power-cut durability (no fsync).",
   },
   {
     id: "ux",
@@ -96,40 +96,46 @@ export const EXPERIMENTS: Experiment[] = [
     procedure: "Small within-subject study on simulated price paths.",
     interpretation: "Small samples only indicate direction; no general claims.",
     status: "optional",
-    needs: "Ethics and consent for a user study; the ledger for P&L variants.",
+    needs: "Ethics and consent for a user study; a ledger for the user's own P&L variants.",
   },
 ];
 
-/** Results table, ready for real numbers. A null value renders as "Not yet measured". */
+/**
+ * Results table. Numbers are copied from docs/BENCHMARKS.md (run of 2026-11-03, one machine, threads not pinned).
+ * A null value renders as "Not yet measured".
+ */
 export type ResultRow = { metric: string; baseline: number | null; tickforge: number | null; unit: string; experiment: string };
 
 export const RESULTS: ResultRow[] = [
-  { metric: "Throughput, 4 producers", baseline: null, tickforge: null, unit: "orders/s", experiment: "throughput" },
-  { metric: "Throughput, 8 producers", baseline: null, tickforge: null, unit: "orders/s", experiment: "throughput" },
-  { metric: "P50 order-to-match latency", baseline: null, tickforge: null, unit: "µs", experiment: "latency" },
-  { metric: "P99 order-to-match latency", baseline: null, tickforge: null, unit: "µs", experiment: "latency" },
+  { metric: "Queue throughput, 4 producers", baseline: 4.99, tickforge: 3.7, unit: "M items/s", experiment: "throughput" },
+  { metric: "Queue throughput, 8 producers", baseline: 3.66, tickforge: 2.41, unit: "M items/s", experiment: "throughput" },
+  { metric: "Enqueue P50, 4 producers", baseline: 45, tickforge: 432, unit: "ns", experiment: "latency" },
+  { metric: "Enqueue P99, 4 producers", baseline: 20564, tickforge: 3920, unit: "ns", experiment: "latency" },
+  { metric: "Enqueue P99, 8 producers", baseline: 45319, tickforge: 26537, unit: "ns", experiment: "latency" },
   { metric: "P99.99 order-to-match latency", baseline: null, tickforge: null, unit: "µs", experiment: "latency" },
   { metric: "Peak queue depth during burst", baseline: null, tickforge: null, unit: "orders", experiment: "burst" },
 ];
 
-/** Correctness evidence that does exist (not performance). Re-run on Linux, 16 Oct 2026. */
+/** Correctness evidence from the test suite (./build.sh test), re-run on Linux (WSL2) on 3 Nov 2026. */
 export const EVIDENCE: { title: string; result: string; how: string }[] = [
-  { title: "Queue stress test", result: "PASS · 1,600,000 / 1,600,000 messages", how: "8 producers × 200,000, one consumer: nothing lost, nothing duplicated, per-producer order kept." },
-  { title: "ThreadSanitizer", result: "PASS · no reports (800,000 messages)", how: "Same stress test built with -fsanitize=thread." },
-  { title: "AddressSanitizer", result: "PASS · no reports (800,000 messages)", how: "Same stress test built with -fsanitize=address: no use-after-free in reclamation." },
-  { title: "Market-data analytics", result: "34 tests · 27 re-run and passing", how: "Hand-calculated expected values for the Journey and MAX analytics; deliberately broken versions of the code are caught. The 7 API tests need FastAPI and were not re-run in this sandbox." },
+  { title: "Engine tests (ctest)", result: "PASS · 6 / 6", how: "Order book, WAL recovery, queue stress, engine end-to-end with kill -9, and the queue stress test under ThreadSanitizer and under AddressSanitizer." },
+  { title: "Crash recovery", result: "PASS · same state hash after kill -9", how: "engine/tests/wal_recovery_test.cpp: replay equals live, file cut at every byte offset, bit-flip detection, writer killed with SIGKILL. The end-to-end test kills the server and compares the hash after restart." },
+  { title: "Database tests", result: "PASS · 25 Rust + 6 Python", how: "Memtable, SSTable (every byte flipped is caught), Bloom filter, compaction, and the TickForgeDB Python module." },
+  { title: "Service and frontend tests", result: "PASS · 17 + 19 + 26", how: "exchange-api pytest 17, market-data pytest 19 (Yahoo is mocked, no network), frontend typecheck and vitest 26." },
 ];
 
 // ---- 09 Limitations and future work --------------------------------------------------------------------
 
 export const LIMITATIONS = [
-  "No performance result has been measured against a baseline yet.",
-  "No persistence: trades are lost when the engine stops.",
-  "One synthetic instrument; symbol_id is ignored; prices are doubles, not integer ticks.",
-  "Limit orders only: no market orders, cancels or modifications.",
+  "The benchmarks are a first run on one machine with unpinned threads. The lock-free queue did not beat the mutex queue on raw throughput; only its enqueue P99 was lower at 4 and 8 producers.",
+  "The engine log is not fsynced: it survives a killed process but not a power cut. No snapshots.",
+  "The database has no per-table id index (get_trade scans), no Rust-side benchmarks, and compaction is not throttled by queue depth.",
+  "Limit orders only: no market orders or modifications (cancel is supported).",
+  "The server uses the std::map book; the faster dense-array book only accepts a fixed price range.",
   "Latency percentiles are power-of-two bucket bounds; no p99.9 / p99.99.",
-  "The trade tape can skip trades at high speed (15 per 250 ms).",
-  "The engine has only been built and tested on Linux.",
+  "Not built: eBPF/XDP, io_uring, core pinning, elastic dual ring, multi-node, memory pools, huge pages, FIX/SBE message encoding.",
+  "The virtual traders use paper money, and resting orders do not reserve cash or shares.",
+  "The engine has only been built and tested on Linux (WSL2).",
   "The research pages are drafts until a teammate who has read each paper signs them off.",
   "Long-run stock histories use today's S&P 500, so they carry survivorship bias.",
 ];
