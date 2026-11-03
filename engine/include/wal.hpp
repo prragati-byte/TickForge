@@ -28,6 +28,14 @@ uint32_t crc32(const uint8_t *data, size_t len);
 // Turn a record into a full frame (len, crc, payload) and back.
 std::string wal_encode_frame(const WalRecord &r);
 
+// The CRC field of the frame for this record. Identical records give identical frames.
+uint32_t wal_frame_crc(const WalRecord &r);
+
+// Decode the frame at the start of `data`. Incomplete: more bytes are needed.
+// Corrupt: the bytes are there but wrong. On Ok, `frame_len` is the whole frame.
+enum class WalFrame { Ok, Incomplete, Corrupt };
+WalFrame wal_decode_frame(const void *data, size_t available, WalRecord &r, size_t &frame_len);
+
 struct WalRecovery {
   uint64_t records = 0;       // good frames replayed
   uint64_t last_seq = 0;      // seq of the last good frame, 0 if none

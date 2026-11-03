@@ -28,7 +28,6 @@ const STATE_TEXT: Record<EngineState, string> = {
 
 const PLANNED = [
   "Kernel bypass networking (AF_XDP)",
-  "Multi-node replication",
 ];
 
 export default function Dashboard() {

@@ -5,6 +5,10 @@
 //                [--conns 4] [--orders 200000] [--runs 5] [--rate 0]
 //                --config "name=flags" --config "name=flags" ...
 //
+// The word @follower among a configuration's flags starts a second server that
+// follows the first (the first gets --replicate) and reports how long after the
+// last ack the follower had every order.
+//
 // Each connection sends one order and waits for its ack before the next (closed
 // loop). With --rate R, the connections together send R orders per second instead
 // of as fast as possible, so the matcher has time to empty its queue; without
@@ -42,6 +46,7 @@ struct Run {
   double orders_per_sec = 0;
   double rtt_p50 = 0, rtt_p99 = 0, rtt_p999 = 0; // microseconds
   double match_p50 = 0, match_p99 = 0;           // microseconds, from the server's stats
+  double catchup_ms = -1;                        // follower, after the last ack
 };
 
 static std::vector<std::string> split_words(const std::string &s) {
@@ -86,6 +91,8 @@ static int connect_to(int port) {
   std::fprintf(stderr, "server_bench: cannot connect to port %d\n", port);
   std::exit(1);
 }
+
+static void connect_to_and_close(int port) { ::close(connect_to(port)); }
 
 // Send orders on one connection, wait for each ack. Trade lines are read and ignored.
 static void client_loop(int fd, int seed, int orders, int64_t gap_ns, std::vector<float> &rtt_us) {
@@ -173,7 +180,24 @@ static Run run_once(const std::string &exe, const std::string &dir, const Config
                     int orders, int rate, int port) {
   std::string wal = dir + "/bench-" + std::to_string(getpid()) + ".wal";
   ::unlink(wal.c_str());
-  pid_t server = start_server(exe, port, wal, cfg.flags);
+  std::vector<std::string> flags;
+  bool with_follower = false;
+  for (const std::string &f : cfg.flags) {
+    if (f == "@follower") with_follower = true;
+    else flags.push_back(f);
+  }
+  if (with_follower) flags.push_back("--replicate");
+  pid_t server = start_server(exe, port, wal, flags);
+  pid_t follower = -1;
+  int follower_fd = -1;
+  const std::string follower_wal = wal + ".follower";
+  if (with_follower) {
+    connect_to_and_close(port); // the leader must be up before the follower starts
+    ::unlink(follower_wal.c_str());
+    follower = start_server(exe, port + 1, follower_wal,
+                            {"--no-pin", "--follow", "127.0.0.1:" + std::to_string(port)});
+    follower_fd = connect_to(port + 1);
+  }
   std::vector<int> fds;
   for (int i = 0; i < conns; i++) fds.push_back(connect_to(port));
 
@@ -187,6 +211,16 @@ static Run run_once(const std::string &exe, const std::string &dir, const Config
   for (auto &t : clients) t.join();
   double secs = std::chrono::duration<double>(Clock::now() - t0).count();
 
+  auto last_ack = Clock::now();
+  Run r;
+  if (with_follower) {
+    final_stats(follower_fd, static_cast<uint64_t>(per_conn) * conns);
+    r.catchup_ms = std::chrono::duration<double, std::milli>(Clock::now() - last_ack).count();
+    ::close(follower_fd);
+    kill(follower, SIGTERM);
+    waitpid(follower, nullptr, 0);
+    ::unlink(follower_wal.c_str());
+  }
   std::string stats = final_stats(fds[0], static_cast<uint64_t>(per_conn) * conns);
   for (int fd : fds) ::close(fd);
   kill(server, SIGTERM);
@@ -195,7 +229,6 @@ static Run run_once(const std::string &exe, const std::string &dir, const Config
 
   std::vector<float> all;
   for (auto &s : samples) all.insert(all.end(), s.begin(), s.end());
-  Run r;
   r.orders_per_sec = all.size() / secs;
   r.rtt_p50 = percentile(all, 0.50);
   r.rtt_p99 = percentile(all, 0.99);
@@ -268,6 +301,15 @@ int main(int argc, char **argv) {
                 *std::max_element(tp.begin(), tp.end()), median(p50), median(p99), median(p999),
                 median(m50), median(m99), *std::min_element(m99.begin(), m99.end()),
                 *std::max_element(m99.begin(), m99.end()));
+  }
+  for (const Config &c : configs) {
+    std::vector<double> lag;
+    for (const Run &x : results[c.name])
+      if (x.catchup_ms >= 0) lag.push_back(x.catchup_ms);
+    if (!lag.empty())
+      std::printf("\n%s: the follower had every order %.0f ms after the last ack (median; includes "
+                  "waiting for its own matcher to finish).\n",
+                  c.name.c_str(), median(lag));
   }
   return 0;
 }

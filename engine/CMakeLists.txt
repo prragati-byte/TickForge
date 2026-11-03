@@ -48,6 +48,12 @@ add_test(NAME uring_wal_test COMMAND uring_wal_test)
 set_tests_properties(uring_wal_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_test(NAME engine_e2e_uring COMMAND engine_e2e_test $<TARGET_FILE:engine_server> --wal-io uring)
 
+# Leader and follower as real processes: same state hash, kill -9 on either node.
+add_executable(replication_test tests/replication_test.cpp)
+target_link_libraries(replication_test PRIVATE tickforge_wal Threads::Threads)
+add_test(NAME replication_test COMMAND replication_test $<TARGET_FILE:engine_server>)
+set_tests_properties(replication_test PROPERTIES TIMEOUT 120)
+
 # The same crash test on the elastic queue. A ring of 2 sends nearly every queued
 # order through the overflow path.
 add_test(NAME engine_e2e_elastic COMMAND engine_e2e_test $<TARGET_FILE:engine_server> --queue elastic)
@@ -90,6 +96,9 @@ foreach(san thread address)
   add_test(NAME engine_e2e_elastic_${san}
            COMMAND engine_e2e_test $<TARGET_FILE:engine_server_${san}> --queue elastic --ring-size 8)
   set_tests_properties(engine_e2e_elastic_${san} PROPERTIES
+    FAIL_REGULAR_EXPRESSION "ThreadSanitizer|AddressSanitizer|LeakSanitizer")
+  add_test(NAME replication_${san} COMMAND replication_test $<TARGET_FILE:engine_server_${san}>)
+  set_tests_properties(replication_${san} PROPERTIES TIMEOUT 300
     FAIL_REGULAR_EXPRESSION "ThreadSanitizer|AddressSanitizer|LeakSanitizer")
 endforeach()
 

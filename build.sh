@@ -367,6 +367,12 @@ server_benchmarks() {
   echo
   "${sb[@]}" --conns 4 --orders 200000 --runs 5 --config "write()=--wal-io write" --config "io_uring=--wal-io uring"
   echo
+  echo "### Replication"
+  echo
+  "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 9 --config "no replication=" --config "--replicate, no follower=--replicate" --config "with a follower=@follower"
+  echo
+  "${sb[@]}" --conns 4 --orders 200000 --runs 5 --config "no replication=" --config "with a follower=@follower"
+  echo
   echo "### Queue"
   echo
   "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 9 --config "lock-free list=--queue lockfree" --config "elastic ring=--queue elastic"

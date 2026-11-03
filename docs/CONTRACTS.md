@@ -54,7 +54,7 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"state_hash","hash":"9f3a1c0b5d2e7a44","last_seq":4022}
 ```
 
-- `reason` is one of: `bad_request`, `unknown_symbol`, `max_qty`, `price_band`, `unknown_order`.
+- `reason` is one of: `bad_request`, `unknown_symbol`, `max_qty`, `price_band`, `unknown_order`, `read_only` (an order or cancel sent to a follower), `follower_ahead`, `diverged` (see Replication).
 - `book` levels are `[price_cents, total_qty]`, best price first, aggregated per price.
 - `order_id` of a new order equals the `seq` it was given. `trade_id` is a counter that starts at 1.
 - A `cancel` that succeeds returns `ack` with the same `order_id`; the order is gone from the book.
@@ -93,6 +93,25 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 
 - `--wal-io write` (default): one `write()` per frame.
 - `--wal-io uring`: one io_uring write per frame, waited for before the ack. Same file, same guarantee. If this kernel or sandbox cannot create a ring, the server stops at startup with exit code 2 instead of using something else.
+
+### Replication
+
+Off by default. A leader started with `--replicate` serves its WAL; a server started with `--follow HOST:PORT` keeps a copy. A server cannot do both.
+
+```json
+{"type":"replicate","client_ref":0,"after_seq":4021,"after_crc":2882303761}
+{"type":"replicate_ok","last_seq":4100}
+```
+
+- The follower sends `replicate` with the seq of its last frame and that frame's `crc` field (`0` and `0` when empty).
+- The leader answers `replicate_ok`. After that line the connection carries raw WAL frames (section 3) and no more JSON, new frames as they are written.
+- `follower_ahead` (the follower has frames the leader does not) and `diverged` (the frame at `after_seq` has another CRC) are refusals retrying cannot fix: the follower exits with code 3. So does a leader without `--replicate`, which answers `bad_request` as it would to any unknown message.
+- The follower appends each frame to its own WAL, then queues it for the same matching code. Its WAL is byte-identical to the leader's up to its last frame, and it has the same state hash at the same `last_seq`.
+- Asynchronous: the leader acks without waiting for any follower, so acknowledged orders can be missing from a follower if the leader's disk is lost. It ships only whole frames from its file.
+- A follower rejects `new_order` and `cancel` with `read_only` and answers `book`, `stats` and `state_hash`. If the connection drops it retries every 100 ms and continues from its own WAL.
+- There is no automatic failover. To promote a follower, restart it on the same WAL without `--follow`.
+- With either flag, `stats` also has `role` (`leader` or `follower`), and `replicas` on a leader, `leader_connected` and `damaged_frames` on a follower.
+- A follower does not pin by default, so that it does not share the leader's core on one machine. On a shared machine, give each node its own `--pin-core` if you want both pinned.
 
 ### Rules
 

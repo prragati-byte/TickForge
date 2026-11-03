@@ -61,10 +61,11 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | MySQL baseline: the database vs MySQL 8.4 InnoDB, same trades | measured | `./build.sh bench-mysql`, results and settings in `docs/BENCHMARKS.md`. Faster at this one narrow job with the same durability; its P99.99 is no better, and MySQL with fsync is stronger than anything TickForge offers |
 | Elastic dual ring queue (off by default, `--queue elastic`, `--ring-size N`) | built, verified, not the default | `engine/tests/elastic_ring_test.cpp` and the `kill -9` test on the real server, both under ThreadSanitizer and AddressSanitizer. Much faster than the list queue alone; no difference through the whole server, see `docs/BENCHMARKS.md` |
 | io_uring for storage (off by default: `--wal-io uring` for the engine WAL, `TICKFORGE_DB_IO=uring` for SSTables and compaction) | built, verified, not the default | `engine/tests/uring_wal_test.cpp`, `storage/tests/uring_test.rs`: identical bytes, recovery, `kill -9`. Slower on this machine, see `docs/BENCHMARKS.md`, so the normal path stays |
+| Leader to follower WAL shipping (off by default: `--replicate` on the leader, `--follow HOST:PORT` on the follower) | built, verified, on localhost | `engine/tests/replication_test.cpp`: real processes, both nodes end with the same state hash and a byte-identical WAL, `kill -9` on either node, also under ThreadSanitizer and AddressSanitizer. Asynchronous, and there is no automatic failover |
 | Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |
-| Kernel bypass networking, multi-node replication | planned | |
+| Kernel bypass networking | planned | |
 
 ### Behavioural features
 

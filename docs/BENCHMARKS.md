@@ -155,6 +155,27 @@ Median of 11 runs. Writing includes fsync and rename. One thread, nothing else r
 | Write 1,000,000 trades | 160.8 | 193.2 |
 | Compact 7 tables, 14,000 trades | 13.2 | 15.4 |
 
+### Replication
+
+4 connections, 30000 orders per run, 9 runs per configuration, paced at 2000 orders/s in total. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| no replication | 2000 | 2000 to 2000 | 122.5 | 403.0 | 935.5 | 41.3 | 280.2 | 84 to 327 |
+| --replicate, no follower | 2000 | 2000 to 2000 | 122.5 | 423.0 | 895.7 | 44.3 | 295.7 | 160 to 350 |
+| with a follower | 2000 | 1996 to 2000 | 161.6 | 488.0 | 1121.5 | 41.5 | 298.8 | 185 to 1506 |
+
+with a follower: the follower had every order 1 ms after the last ack (median; includes waiting for its own matcher to finish).
+
+4 connections, 200000 orders per run, 5 runs per configuration, closed loop, as fast as possible. Median over the runs; throughput also shows the slowest and fastest run.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| no replication | 18310 | 18195 to 18478 | 195.3 | 813.0 | 1232.8 | 2001147.8 | 3185621.5 | 3023626 to 3385397 |
+| with a follower | 12279 | 12234 to 12331 | 283.9 | 1212.4 | 1830.5 | 1178.7 | 7033.7 | 5381 to 49651 |
+
+with a follower: the follower had every order 1 ms after the last ack (median; includes waiting for its own matcher to finish).
+
 ## TickForge database vs MySQL
 
 Written by `./build.sh bench-mysql` (`bench/mysql_baseline/`). This compares a narrow job, storing fixed-schema trade records. It says nothing about general database quality: MySQL also provides SQL, secondary indexes, multi-row transactions, replication tooling and backups, and TickForge's database provides none of those.
