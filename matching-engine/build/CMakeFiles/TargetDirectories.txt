@@ -1,3 +1,0 @@
-/home/shauryasaxena/Documents/TickForge/matching-engine/build/CMakeFiles/matching_engine.dir
-/home/shauryasaxena/Documents/TickForge/matching-engine/build/CMakeFiles/edit_cache.dir
-/home/shauryasaxena/Documents/TickForge/matching-engine/build/CMakeFiles/rebuild_cache.dir

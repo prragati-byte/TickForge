@@ -1,1 +1,18 @@
-/target
+# build output
+build/
+target/
+node_modules/
+dist/
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# runtime data and logs created by build.sh
+.run/
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+# local env
+.env
