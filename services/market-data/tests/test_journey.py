@@ -1,19 +1,18 @@
 """
 Tests for the Journey analytics and API.
-Run:  pip install pytest httpx && python -m pytest -q      (inside market-data/)
+Run:  python -m pytest -q      (inside services/market-data/, with the repo .venv active)
 
 Expected values are calculated by hand in the comments, not copied from the code's output.
+The API tests use a fake provider; nothing here touches the network.
 """
 import json
 import statistics
-import sys
-import types
+import time
 
 import pandas as pd
 import pytest
 
-import journey
-import stocks
+from app import journey, stocks
 
 # ---- fixture A: 10 five-minute bars, New York, 14 Oct 2026 --------------------------------------
 #  idx:     0    1    2    3    4   5   6   7    8    9
@@ -156,35 +155,44 @@ def test_output_is_valid_json_without_nan():
 
 
 # ---- API ------------------------------------------------------------------------------------------
-class FakeTicker:
-    calls = 0
-    fail = False
-    empty = False
+class FakeProvider:
+    """Stands in for Yahoo. `calls` counts history requests so tests can see the cache working."""
 
-    def __init__(self, symbol):
-        self.symbol = symbol
-        self.fast_info = {"currency": "USD", "year_high": 200.0, "year_low": 80.0}
+    def __init__(self):
+        self.calls = 0
+        self.fail = False
+        self.empty = False
+        self.extras = {"currency": "USD", "year_high": 200.0, "year_low": 80.0}
 
-    def history(self, period, interval):
-        FakeTicker.calls += 1
-        if FakeTicker.fail:
+    def history(self, symbol, period, interval):
+        self.calls += 1
+        if self.fail:
             raise RuntimeError("yahoo down")
-        if FakeTicker.empty:
+        if self.empty:
             return pd.DataFrame()
         if (period, interval) == ("5d", "1d"):
             return pd.DataFrame({"Close": [99.0, 104.0]}, index=pd.date_range("2026-10-13", periods=2, tz="UTC"))
         return frame_a()
 
+    def info(self, symbol):
+        return self.extras
+
 
 @pytest.fixture()
-def client(monkeypatch):
-    from fastapi.testclient import TestClient
-    import main
+def fake():
+    return FakeProvider()
 
-    monkeypatch.setattr(stocks, "yf", types.SimpleNamespace(Ticker=FakeTicker))
-    stocks._cache.clear()
-    FakeTicker.calls, FakeTicker.fail, FakeTicker.empty = 0, False, False
-    return TestClient(main.app)
+
+@pytest.fixture()
+def client(fake):
+    from fastapi.testclient import TestClient
+    from app import main
+
+    original = stocks.provider
+    stocks.set_provider(fake)
+    stocks.cache.clear()
+    yield TestClient(main.app)
+    stocks.set_provider(original)
 
 
 def test_api_journey_ok(client):
@@ -197,36 +205,52 @@ def test_api_journey_ok(client):
     assert len(body["history"]) == 10 and body["storyMethod"] == "rule-based"
 
 
-def test_api_missing_year_range_is_null(client, monkeypatch):
-    monkeypatch.setattr(FakeTicker, "__init__", lambda self, s: setattr(self, "fast_info", {}))
+def test_api_missing_year_range_is_null(client, fake):
+    fake.extras = {}
     body = client.get("/api/stocks/AAPL/journey?range=5d").json()
     assert body["yearHigh"] is None and body["yearLow"] is None and body["currency"] == "USD"
 
 
-def test_api_rejects_bad_input(client):
+def test_api_rejects_bad_input(client, fake):
     assert client.get("/api/stocks/AAPL/journey?range=10y").status_code == 400
     assert client.get("/api/stocks/AAPL?range=1y&interval=5m").status_code == 400   # Yahoo would reject this pair
     assert client.get("/api/stocks/AAPL?range=1d&interval=1m").status_code == 400
     assert client.get("/api/stocks/bad%20sym!/journey").status_code == 400
-    assert FakeTicker.calls == 0                                                      # nothing reached Yahoo
+    assert fake.calls == 0                                                            # nothing reached Yahoo
 
 
-def test_api_not_found_and_provider_errors(client):
-    FakeTicker.empty = True
+def test_api_not_found_and_provider_errors(client, fake):
+    fake.empty = True
     assert client.get("/api/stocks/NOPE/journey?range=1d").status_code == 404
-    FakeTicker.empty, FakeTicker.fail = False, True
+    fake.empty, fake.fail = False, True
     r = client.get("/api/stocks/AAPL/journey?range=1mo")
     assert r.status_code == 502 and "yahoo" not in r.text.lower()
 
 
-def test_cache_serves_repeat_requests_and_is_bounded(client):
+def test_cache_serves_repeat_requests_and_is_bounded(client, fake):
     client.get("/api/stocks/AAPL/journey?range=1d")
-    used = FakeTicker.calls
+    used = fake.calls
     client.get("/api/stocks/AAPL/journey?range=1d")
-    assert FakeTicker.calls == used                      # second request came from the cache
+    assert fake.calls == used                            # second request came from the cache
     for i in range(stocks.CACHE_MAX_ENTRIES + 25):
-        stocks._cache_put(("x", i), i)
-    assert len(stocks._cache) <= stocks.CACHE_MAX_ENTRIES
+        stocks.cache.put(("x", i), i)
+    assert len(stocks.cache) <= stocks.CACHE_MAX_ENTRIES
+
+
+def test_cache_entries_expire(monkeypatch):
+    small = stocks.TTLCache(ttl=30, max_entries=5)
+    now = [1000.0]
+    monkeypatch.setattr(stocks.time, "monotonic", lambda: now[0])
+    small.put("k", 1)
+    assert small.get("k") == 1
+    now[0] += 31
+    assert small.get("k") is None
+
+
+def test_slow_provider_call_times_out(monkeypatch):
+    monkeypatch.setattr(stocks, "PROVIDER_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(stocks.ProviderTimeout):
+        stocks._with_timeout(lambda: time.sleep(0.5))
 
 
 def test_existing_quote_endpoint_still_works(client):
