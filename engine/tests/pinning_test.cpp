@@ -96,7 +96,8 @@ static std::multimap<std::string, std::vector<int>> thread_cpus(pid_t pid) {
     while (std::getline(status, line))
       if (line.rfind("Cpus_allowed_list:", 0) == 0) cpus = line.substr(line.find(':') + 1);
     cpus.erase(0, cpus.find_first_not_of(" \t"));
-    out.emplace(name, parse_cpu_list(cpus));
+    // A short-lived connection thread (the port probe) may be gone by now.
+    if (!name.empty() && !cpus.empty()) out.emplace(name, parse_cpu_list(cpus));
   }
   closedir(d);
   return out;
