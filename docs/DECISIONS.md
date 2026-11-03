@@ -85,3 +85,16 @@ Both versions pass `queue_stress_test` under ThreadSanitizer and AddressSanitize
 - **Only the matcher gets a core of its own.** Connection threads can be up to 100, so they share the remaining CPUs. They inherit that set from the main thread.
 - **Pinning is not isolation.** Without `isolcpus` the kernel can still schedule other processes on that core.
 - **Benchmark finding, separate from pinning.** At full closed-loop load (4 connections, about 15,000 orders/s) the matcher is the bottleneck: its P50 reaches about 2.4 s of queue backlog, because it sends each trade to every client from the matching thread. The RTT stays low because the ack is sent before matching. So `server_bench` has a paced mode, and the matcher columns only mean "latency" when the load is paced.
+
+## MySQL baseline
+
+- **Real MySQL, no root.** `run.py` unpacks the Ubuntu packages into `.run/mysql`, so nothing is installed on the system, as with the rest of `build.sh`. `TICKFORGE_MYSQLD` points it at another `mysqld`.
+- **Separate crate.** `bench/mysql_baseline` has its own `Cargo.toml`, so `storage/` and `./build.sh test` never depend on a MySQL client.
+- **Same durability is the only fair row.** Following section 11.6 of the project document: TickForge's database acknowledges before fsync, so it is compared with MySQL at `innodb_flush_log_at_trx_commit=2`. The `flush=1, sync_binlog=1` row is shown for reference, labelled as stronger. Commits there took about 7 ms on this virtual disk, so it uses 5,000 trades instead of 200,000.
+- **Settings chosen in MySQL's favour.** Autocommit (one socket round trip per commit; the first version used `BEGIN` / `INSERT` / `COMMIT` and paid three), performance schema off, a Unix socket.
+- **What the numbers say.** One trade per commit, about 55x MySQL's best fair row, most of that because a function call replaces a socket round trip. In batches of 100, about 4x. **P99.99 is not better:** 7 ms against 7 to 17 ms singly, 76 ms against 38 to 86 ms in batches, because flush and compaction run on the insert path. This is the cost the activity-aware compaction idea is meant to address.
+- **Bytes written come from `/proc/diskstats`.** This WSL2 kernel has no `/proc/<pid>/io` (the first run reported 0 for everything, and those numbers were thrown away), so the count is the whole disk, which needs an idle machine.
+- **Recovery test size.** 99,999 trades, one short of a memtable flush. The first attempt used 100,000, which left the log empty and made TickForge's recovery look better than its worst case.
+- **Not explained.** MySQL without the binlog came out slower than with it, in both full runs (3,990 against 5,312 trades/s). The no-binlog configuration always ran first and the order was not varied, so this may be an artefact. Do not read it as a finding about MySQL.
+- **P99.99 of the batch rows** comes from 2,000 commits, so it is close to the single worst commit.
+- **MyRocks not run.** It is the closer LSM baseline according to the project document, but it is not in the Ubuntu packages.

@@ -58,6 +58,7 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | Rust LSM database (`tickforge_db`): memtable, SSTable with Bloom filter, compaction | built, verified | `cargo test` and `storage/tests/test_python.py` |
 | Engine benchmarks (lock-free vs mutex queue, dense vs map book) | built | `docs/BENCHMARKS.md`. On the test machine the mutex queue had higher raw throughput; read the table before drawing conclusions |
 | Core pinning (on by default, `--no-pin` to disable, `--pin-core N` to choose) | built, verified | `engine/tests/pinning_test.cpp` reads each thread's allowed CPUs from `/proc`. Pinned vs unpinned in `docs/BENCHMARKS.md`: no regression, and the gain is inside the run-to-run spread on this WSL2 machine |
+| MySQL baseline: the database vs MySQL 8.4 InnoDB, same trades | measured | `./build.sh bench-mysql`, results and settings in `docs/BENCHMARKS.md`. Faster at this one narrow job with the same durability; its P99.99 is no better, and MySQL with fsync is stronger than anything TickForge offers |
 | Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |

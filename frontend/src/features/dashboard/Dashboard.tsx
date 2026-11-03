@@ -31,7 +31,6 @@ const PLANNED = [
   "io_uring for storage I/O",
   "Elastic dual ring buffer",
   "Multi-node replication",
-  "Benchmark against a MySQL baseline",
 ];
 
 export default function Dashboard() {
