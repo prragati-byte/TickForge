@@ -264,27 +264,16 @@ engine_tests() {
   build_engine Debug "$RUN/build/engine-test" && ctest --test-dir "$RUN/build/engine-test" --output-on-failure
 }
 
-# The queue stress test again with ThreadSanitizer and AddressSanitizer (if the engine's CMake offers it).
-engine_sanitizer_tests() {
-  if ! grep -q TICKFORGE_SANITIZE "$ROOT/engine/CMakeLists.txt" 2> /dev/null; then
-    echo "engine/CMakeLists.txt has no TICKFORGE_SANITIZE option: skipping"
-    return 0
-  fi
-  local kind
-  for kind in thread address; do
-    cmake -S "$ROOT/engine" -B "$RUN/build/engine-$kind" -DCMAKE_BUILD_TYPE=Debug -DTICKFORGE_SANITIZE="$kind" \
-      && cmake --build "$RUN/build/engine-$kind" -j "$(cpu_count)" \
-      && ctest --test-dir "$RUN/build/engine-$kind" --output-on-failure || return 1
-  done
-}
-
 do_test() {
   check_tools
   setup_python
   install_frontend
+  build_database
+  # ctest includes the WAL crash tests, the kill -9 recovery test and the queue stress test
+  # under ThreadSanitizer and AddressSanitizer.
   step "C++ engine tests (ctest)" engine_tests
-  step "C++ sanitizer tests" engine_sanitizer_tests
   step "Rust tests (cargo test)" bash -c "cd '$ROOT/storage' && cargo test"
+  step "database Python binding" "$PY" -m unittest discover -s "$ROOT/storage/tests" -p 'test_python.py'
   step "exchange-api tests (pytest)" bash -c "cd '$ROOT/services/exchange-api' && '$PY' -m pytest -q"
   step "market-data tests (pytest)" bash -c "cd '$ROOT/services/market-data' && '$PY' -m pytest -q"
   step "frontend typecheck" bash -c "cd '$ROOT/frontend' && npm run typecheck"
