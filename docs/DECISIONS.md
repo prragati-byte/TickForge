@@ -149,3 +149,9 @@ Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, 
 - **Result: it cannot be tested here, so it stays planned, not built.** A socket can be bound, but it can only receive through an XDP program that redirects packets into an `XSKMAP`, and loading BPF needs real privileges: a user namespace does not grant them, `kernel.unprivileged_bpf_disabled` is 2, and sudo here asks for a password.
 - **With root it may well work:** nothing found rules it out, but that part was not run, so it is not claimed. To check, run the probe as root on a veth device.
 - **It would not fit today's engine anyway.** Orders arrive over TCP on 127.0.0.1. AF_XDP takes raw packets from a device, so it would need its own ingress protocol, and loopback traffic would not go through it.
+
+## Aurora theme
+
+- **Tokens only, plus two lines of CSS, because a gradient is not a colour.** `--accent` is used for text, borders and charts, so it stays one solid colour, and `--accent-gradient` and `--canvas-gradient` are new tokens. Two rules in `index.css` apply them: `body` and `.bg-accent:not(:disabled)`. No component changed. Without `:not(:disabled)`, the gradient covers the plain colour a disabled button sets, which a screenshot showed.
+- **Dark mode uses the palette exactly. Light mode cannot.** `#22d3ee` on white has a contrast of about 1.8, so light mode uses darker versions of the same hues (`#0e7490` to `#6d28d9`) on pale backgrounds.
+- **Checked.** Every text colour on every background is at least 4.5 (WCAG AA) in both modes, and `--on-fill` on both ends of the gradient. The lowest are 4.60 in dark mode (`--on-fill` on violet) and 4.74 in light mode (`--up` and `--accent`). The old light `--faint` was 4.41; it is 4.91 now. `--up`, `--down`, `--warn` and `--on-fill` are unchanged.
