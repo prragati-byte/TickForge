@@ -48,10 +48,14 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 | market-data: cached, timeouts on every Yahoo call, Journey analytics | built, verified (no network in tests) | `services/market-data/tests` (19 tests) |
 | Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 26 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
 | Behavioural features: daily vs long-term window, volatility-scaled axis, scenario preview before an order, return next to worst fall | built | calculations unit-tested; see below |
-| `build.sh` | built, verified with a stand-in engine and database | start, health waits, Ctrl+C cleanup, double run, `test`, `bench`, `clean` |
-| C++ engine, WAL and crash recovery, sanitizer-tested queue | built by Core, verified at integration | |
-| Rust LSM database (`tickforge_db`) | built by Core, verified at integration | |
-| Engine benchmarks (lock-free vs mutex queue, dense vs map book) | built by Core, numbers at integration | |
+| `build.sh` | built, verified | `./build.sh test` passes all suites; the full stack was started with the real engine and database, and an order placed through the API matched in the engine, was attributed to the right two traders and appeared in the stored history |
+| C++ engine: TCP server, price-time matching, cancel, risk checks, integer cents | built, verified | `ctest` (6 tests) incl. an end-to-end test over TCP |
+| WAL and crash recovery | built, verified | `engine/tests/wal_recovery_test.cpp` (file cut at every byte, bit flips, writer killed with SIGKILL) and the engine test that `kill -9`s the server: the book hash is identical after restart. Survives a process crash, **not** a power cut (no fsync yet) |
+| Lock-free queue | built, verified | stress test under ThreadSanitizer and AddressSanitizer; review notes in `docs/DECISIONS.md` |
+| Dense-array order book (next to the `std::map` book) | built, verified, not used by the server | same random orders give identical trades and hash in `order_book_tests`; speed in `docs/BENCHMARKS.md` |
+| Rust LSM database (`tickforge_db`): memtable, SSTable with Bloom filter, compaction | built, verified | `cargo test` and `storage/tests/test_python.py` |
+| Engine benchmarks (lock-free vs mutex queue, dense vs map book) | built | `docs/BENCHMARKS.md`. On the test machine the mutex queue had higher raw throughput; read the table before drawing conclusions |
+| Fsync or group commit for the WAL, per-table id index in the database | planned | |
 | Journey "MAX" range (since listing) | planned: the dashboard code exists, the market-data side does not | |
 | Dashboard progress against a benchmark index (feature 14, second half) | planned | |
 | Kernel bypass networking, io_uring, core pinning, elastic dual ring, multi-node replication | planned | |
