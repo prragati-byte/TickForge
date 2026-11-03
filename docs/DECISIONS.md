@@ -30,6 +30,13 @@ Not re-checked individually (will be covered by the work that fixes them): rando
 - **Rejected orders are not written to the WAL.** They change no state. Risk checks depend only on book state, so replay of accepted inputs gives the same result.
 - **`start / pause / stop / reset / speed` control the virtual traders, not the engine.** The engine is a server that is always on.
 - **Engine reports its own CPU and memory** from `/proc/self`, so the API does not need the engine's pid.
+- **Fills are attributed from the acks.** exchange-api remembers `order_id -> trader` from each `ack` and shrinks the remaining quantity on every trade. A manual order has trader id 0 and no account, so the other side of such a trade is the only one whose cash changes.
+- **Resting orders do not reserve cash or shares.** Simpler than a reservation system; the order generator checks balances when it creates an order. A trader can end up slightly short; cash and shares are still conserved exactly across all traders.
+- **Telemetry shows one symbol (AAPL).** The contract has one `book` in the stats message; the dashboard's order book panel uses `/ws/orderbook?symbol=` for any symbol.
+- **The dashboard shows empty states, not sample data, when a service is down.** The old "simulation mode" mixed invented numbers with real ones.
+- **Removed the wheel-scroll hijack** (`useSmoothScroll`). It broke keyboard and zoom use, and nothing depended on it.
+- **Journey "MAX" is hidden.** The frontend code for it exists, but the market-data side was reverted before this cleanup and has no `max` range. Listed as planned.
+- **Frontend colours go through role names** (`canvas`, `surface`, `line`, `fg`, `muted`, `accent`, `up`, `down`, `warn`) defined as CSS variables, so light and dark themes only redefine the variables.
 - **Linux and macOS only.** `build.sh` is bash; the sanitizer tests and `kill -9` recovery check need a Unix. On Windows use WSL2.
 
 ## Engine (C++)

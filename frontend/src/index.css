@@ -1,132 +1,135 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 /*
- * Palette: violet + pink on deep indigo-black.
- * The components use Tailwind's slate / cyan / blue names, so re-pointing the tokens
- * here recolours the whole app from one place:
- *   slate -> indigo-tinted darks,  cyan -> violet (primary accent),  blue -> pink (planned / secondary).
- * emerald (up / buy) and rose (down / sell) are kept on purpose: green and red carry meaning in finance.
+ * Design tokens. Everything on screen takes its colour, type and spacing from here.
+ *
+ * Colour roles
+ *   canvas / surface / raised   three steps of background, darkest to lightest in dark mode
+ *   line / line-strong          borders and dividers
+ *   strong / fg / muted / faint text, from headline to hint
+ *   accent                      the only decorative colour. Blue, because it means nothing in a market:
+ *                               green, red and amber are kept for up, down and warning.
+ *   up / down / warn            price direction and status, never decoration
+ *   on-fill                     text colour on a solid up / down / accent fill
+ *
+ * Type: IBM Plex Sans for words, IBM Plex Mono for every number that has to line up.
+ * Scale: 12 / 14 / 16 / 20 / 28 px (text-xs, sm, base, xl, 3xl). Nothing smaller than 12 px.
  */
-@theme {
-  --color-slate-200: #ebe6fb;
-  --color-slate-300: #d0c8ef;
-  --color-slate-400: #a99fd0;
-  --color-slate-500: #8479ad;
-  --color-slate-600: #625888;
-  --color-slate-700: #41376a;
-  --color-slate-800: #2b2249;
-  --color-slate-900: #191031;
-  --color-slate-950: #0d0820;
-
-  --color-cyan-300: #d9c7ff;
-  --color-cyan-400: #b793ff;
-  --color-cyan-500: #8b5cf6;
-
-  --color-blue-400: #f472b6;
-  --color-blue-500: #ec4899;
-}
-
-@keyframes trace-glow {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
-}
-
 :root {
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  background: var(--color-slate-950);
-  scroll-padding-top: 6rem;
+  --canvas: #0c0f14;
+  --surface: #12171e;
+  --raised: #1a212a;
+  --line: #242c37;
+  --line-strong: #364252;
+  --strong: #f2f5f8;
+  --fg: #cfd6df;
+  --muted: #98a4b3;
+  --faint: #7e8a9a;
+  --accent: #6ea8ff;
+  --up: #34c98b;
+  --down: #f26d78;
+  --warn: #e3a83a;
+  --on-fill: #0a0d11;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --canvas: #f4f6f8;
+    --surface: #ffffff;
+    --raised: #edf0f4;
+    --line: #dde3ea;
+    --line-strong: #c0cad6;
+    --strong: #0d131a;
+    --fg: #29323f;
+    --muted: #4f5c6b;
+    --faint: #637082;
+    --accent: #1f56c4;
+    --up: #0d7a50;
+    --down: #bf2f3d;
+    --warn: #86570a;
+    --on-fill: #ffffff;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #f4f6f8;
+  --surface: #ffffff;
+  --raised: #edf0f4;
+  --line: #dde3ea;
+  --line-strong: #c0cad6;
+  --strong: #0d131a;
+  --fg: #29323f;
+  --muted: #4f5c6b;
+  --faint: #637082;
+  --accent: #1f56c4;
+  --up: #0d7a50;
+  --down: #bf2f3d;
+  --warn: #86570a;
+  --on-fill: #ffffff;
+}
+
+@theme inline {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-strong: var(--strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-warn: var(--warn);
+  --color-on-fill: var(--on-fill);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+  --radius-2xl: 8px;
+}
+
+html {
+  scroll-padding-top: 5rem;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    radial-gradient(circle at 15% -10%, color-mix(in srgb, var(--color-cyan-500) 14%, transparent), transparent 40%),
-    radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--color-blue-500) 9%, transparent), transparent 38%),
-    var(--color-slate-950);
+  background: var(--canvas);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.16;
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--color-slate-500) 8%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--color-slate-500) 8%, transparent) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: linear-gradient(to bottom, black, transparent 65%);
+* {
+  box-sizing: border-box;
 }
 
-button:focus-visible,
-input:focus-visible,
-a:focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--color-cyan-400);
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--color-slate-950); }
-::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--color-slate-700); }
-
-/* ---------- scroll motion ---------- */
-
-/* Reveal: panels rise in once, the first time they enter the viewport. */
-.reveal {
-  opacity: 0;
-  transform: translateY(32px) scale(0.985);
-  transition: opacity 0.8s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-.reveal-in {
-  opacity: 1;
-  transform: none;
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* Reading-progress bar and drifting colour blobs, driven by the page scroll (pure CSS). */
-.scroll-progress {
-  position: fixed;
-  inset: 0 0 auto 0;
-  z-index: 60;
-  height: 3px;
-  transform: scaleX(0);
-  transform-origin: 0 50%;
-  background: linear-gradient(90deg, var(--color-cyan-500), var(--color-blue-400));
-}
-
-/* Soft glows made from radial gradients: far cheaper to paint than a blur() filter on a huge element. */
-.bg-blob {
-  position: fixed;
-  z-index: -10;
-  width: 46rem;
-  height: 46rem;
-  border-radius: 50%;
-  pointer-events: none;
-  will-change: transform;
-}
-.blob-a { left: -14rem; top: 6rem; background: radial-gradient(circle closest-side, color-mix(in srgb, var(--color-cyan-500) 22%, transparent), transparent); }
-.blob-b { right: -16rem; top: 32rem; background: radial-gradient(circle closest-side, color-mix(in srgb, var(--color-blue-500) 16%, transparent), transparent); }
-
-@supports (animation-timeline: scroll()) {
-  .scroll-progress { animation: progress-grow linear both; animation-timeline: scroll(root); }
-  .blob-a { animation: drift-up linear both; animation-timeline: scroll(root); }
-  .blob-b { animation: drift-down linear both; animation-timeline: scroll(root); }
-}
-@keyframes progress-grow { to { transform: scaleX(1); } }
-@keyframes drift-up { to { transform: translateY(-60vh); } }
-@keyframes drift-down { to { transform: translateY(40vh); } }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--canvas); }
+::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--line-strong); border: 2px solid var(--canvas); }
 
 @media (prefers-reduced-motion: reduce) {
-  .reveal { opacity: 1; transform: none; transition: none; }
-  .scroll-progress, .blob-a, .blob-b { animation: none !important; }
-  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 
 /* ---------- PDF export of the integrated paper ---------- */
@@ -136,7 +139,6 @@ summary:focus-visible {
 @media print {
   @page { margin: 18mm; }
   :root, body { background: #fff !important; color: #000; }
-  body::before { display: none !important; }
   html.printing-paper #root { display: none !important; } /* only for "Export as PDF"; Ctrl+P prints normally */
   .print-only { display: block; font: 11pt/1.5 Georgia, "Times New Roman", serif; }
   .print-only * { color: #000 !important; background: transparent !important; border-color: #bbb !important; }
