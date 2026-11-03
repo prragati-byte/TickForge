@@ -54,7 +54,7 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 {"type":"state_hash","hash":"9f3a1c0b5d2e7a44","last_seq":4022}
 ```
 
-- `reason` is one of: `bad_request`, `unknown_symbol`, `max_qty`, `price_band`, `unknown_order`.
+- `reason` is one of: `bad_request`, `unknown_symbol`, `max_qty`, `price_band`, `unknown_order`, `read_only` (an order or cancel sent to a follower), `follower_ahead`, `diverged` (see Replication).
 - `book` levels are `[price_cents, total_qty]`, best price first, aggregated per price.
 - `order_id` of a new order equals the `seq` it was given. `trade_id` is a counter that starts at 1.
 - A `cancel` that succeeds returns `ack` with the same `order_id`; the order is gone from the book.
@@ -77,6 +77,41 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 
 - `--max-qty 10000`: reject larger orders.
 - `--band-pct 20`: once a symbol has traded, reject prices more than 20% away from the last trade price. Before the first trade there is no band.
+
+### Thread placement
+
+- `--no-pin` (default): leave placement to the scheduler.
+- `--pin`: the matching thread runs on one core and every other thread is kept off it. The core is the last one this process may use (`taskset` and cgroup limits are respected). Its SMT sibling is kept free too, when at least 4 CPUs are available. With fewer than 2 CPUs, or on an OS other than Linux, the server runs unpinned.
+- `--pin-core N`: pin, and choose the matcher's core. A core this process may not use is a startup error (exit code 2).
+
+### Queue
+
+- `--queue lockfree` (default): the linked-list queue.
+- `--queue elastic`: a preallocated ring, with a heap list for what does not fit. `--ring-size N` (default 65536) is rounded up to a power of two. FIFO order and the state hash are the same as with the default. `stats` then also has `ring_capacity` and `ring_overflowed` (items that have ever taken the slow path).
+
+### WAL writes
+
+- `--wal-io write` (default): one `write()` per frame.
+- `--wal-io uring`: one io_uring write per frame, waited for before the ack. Same file, same guarantee. If this kernel or sandbox cannot create a ring, the server stops at startup with exit code 2 instead of using something else.
+
+### Replication
+
+Off by default. A leader started with `--replicate` serves its WAL; a server started with `--follow HOST:PORT` keeps a copy. A server cannot do both.
+
+```json
+{"type":"replicate","client_ref":0,"after_seq":4021,"after_crc":2882303761}
+{"type":"replicate_ok","last_seq":4100}
+```
+
+- The follower sends `replicate` with the seq of its last frame and that frame's `crc` field (`0` and `0` when empty).
+- The leader answers `replicate_ok`. After that line the connection carries raw WAL frames (section 3) and no more JSON, new frames as they are written.
+- `follower_ahead` (the follower has frames the leader does not) and `diverged` (the frame at `after_seq` has another CRC) are refusals retrying cannot fix: the follower exits with code 3. So does a leader without `--replicate`, which answers `bad_request` as it would to any unknown message.
+- The follower appends each frame to its own WAL, then queues it for the same matching code. Its WAL is byte-identical to the leader's up to its last frame, and it has the same state hash at the same `last_seq`.
+- Asynchronous: the leader acks without waiting for any follower, so acknowledged orders can be missing from a follower if the leader's disk is lost. It ships only whole frames from its file.
+- A follower rejects `new_order` and `cancel` with `read_only` and answers `book`, `stats` and `state_hash`. If the connection drops it retries every 100 ms and continues from its own WAL.
+- There is no automatic failover. To promote a follower, restart it on the same WAL without `--follow`.
+- With either flag, `stats` also has `role` (`leader` or `follower`), and `replicas` on a leader, `leader_connected` and `damaged_frames` on a follower.
+- If a leader and a follower share a machine and both should be pinned, give each its own `--pin-core`. With plain `--pin` they would both choose the same core.
 
 ### Rules
 
@@ -138,6 +173,8 @@ Rules:
 - `buyer_id` / `seller_id` are the virtual trader ids, 0 if unknown.
 - Errors raise `OSError`; bad arguments raise `ValueError`.
 - SSTable: sorted by `(timestamp_ms, trade_id)`, sparse index every 64 entries, Bloom filter on `trade_id`, CRC-32 footer. Files in the directory are named `sst-<n>.tfs`.
+
+`TICKFORGE_DB_IO=uring` makes flush and compaction write through io_uring (O_DIRECT where the file system allows it). Files are byte-identical to the default `standard`, so a database can be reopened with either setting. Opening raises `OSError` if io_uring is not available and `ValueError` for any other value. The database's own log always uses `write()`.
 
 For tests only: `TICKFORGE_MEMORY_DB=1` makes the Python side use an in-memory stand-in with the same methods. Without it, a failed import of `tickforge_db` is a startup error.
 

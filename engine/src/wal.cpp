@@ -1,4 +1,5 @@
 #include "wal.hpp"
+#include "uring.hpp"
 #include <array>
 #include <cerrno>
 #include <cstring>
@@ -71,6 +72,23 @@ static bool decode_payload(const uint8_t *p, size_t len, WalRecord &r) {
   r.price = static_cast<int64_t>(get(p + 30, 8));
   r.qty = static_cast<uint32_t>(get(p + 38, 4));
   return r.side <= 1;
+}
+
+uint32_t wal_frame_crc(const WalRecord &r) {
+  std::string frame = wal_encode_frame(r);
+  return static_cast<uint32_t>(get(reinterpret_cast<const uint8_t *>(frame.data()) + 4, 4));
+}
+
+WalFrame wal_decode_frame(const void *data, size_t available, WalRecord &r, size_t &frame_len) {
+  const uint8_t *p = static_cast<const uint8_t *>(data);
+  if (available < 8) return WalFrame::Incomplete;
+  const uint64_t len = get(p, 4);
+  if (len > MAX_PAYLOAD) return WalFrame::Corrupt;
+  if (available < 8 + len) return WalFrame::Incomplete;
+  if (crc32(p + 8, len) != static_cast<uint32_t>(get(p + 4, 4))) return WalFrame::Corrupt;
+  if (!decode_payload(p + 8, len, r)) return WalFrame::Corrupt;
+  frame_len = 8 + len;
+  return WalFrame::Ok;
 }
 
 // ---- recovery -----------------------------------------------------------
@@ -159,14 +177,23 @@ WalRecovery wal_recover(const std::string &path,
 
 // ---- writer -------------------------------------------------------------
 
-WalWriter::WalWriter(const std::string &path) {
+WalWriter::WalWriter(const std::string &path, WalIo io) {
   fd_ = ::open(path.c_str(), O_WRONLY | O_APPEND);
   if (fd_ < 0) throw std::runtime_error("cannot open WAL " + path + ": " + std::strerror(errno));
+  if (io == WalIo::Uring) {
+    try {
+      uring_ = std::make_unique<UringWriter>();
+    } catch (...) {
+      ::close(fd_);
+      throw;
+    }
+  }
 }
 
 WalWriter::~WalWriter() { ::close(fd_); }
 
 void WalWriter::append(const WalRecord &r) {
   std::string frame = wal_encode_frame(r);
-  write_all(fd_, frame.data(), frame.size());
+  if (uring_) uring_->write_all(fd_, frame.data(), frame.size());
+  else write_all(fd_, frame.data(), frame.size());
 }

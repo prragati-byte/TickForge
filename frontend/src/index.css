@@ -7,26 +7,35 @@
  *   canvas / surface / raised   three steps of background, darkest to lightest in dark mode
  *   line / line-strong          borders and dividers
  *   strong / fg / muted / faint text, from headline to hint
- *   accent                      the only decorative colour. Blue, because it means nothing in a market:
+ *   accent                      the only decorative colour. Cyan, because it means nothing in a market:
  *                               green, red and amber are kept for up, down and warning.
+ *   accent-gradient             the accent as a fill (cyan to violet). --accent stays one solid colour,
+ *                               because text, borders and charts cannot use a gradient.
+ *   canvas-gradient             the page background, canvas to canvas-end.
  *   up / down / warn            price direction and status, never decoration
  *   on-fill                     text colour on a solid up / down / accent fill
+ *
+ * Palette: "Aurora". Dark mode uses its colours as they are. Light mode uses darker versions of the same
+ * hues on pale backgrounds, because #22d3ee on white is not readable. Up and down are not part of the theme.
  *
  * Type: IBM Plex Sans for words, IBM Plex Mono for every number that has to line up.
  * Scale: 12 / 14 / 16 / 20 / 28 px (text-xs, sm, base, xl, 3xl). Nothing smaller than 12 px.
  */
 :root {
   color-scheme: dark;
-  --canvas: #0c0f14;
-  --surface: #12171e;
-  --raised: #1a212a;
-  --line: #242c37;
-  --line-strong: #364252;
-  --strong: #f2f5f8;
-  --fg: #cfd6df;
-  --muted: #98a4b3;
-  --faint: #7e8a9a;
-  --accent: #6ea8ff;
+  --canvas: #0b1020;
+  --canvas-end: #111c3a;
+  --canvas-gradient: linear-gradient(160deg, var(--canvas), var(--canvas-end));
+  --surface: #141f40;
+  --raised: #1c2950;
+  --line: #27345e;
+  --line-strong: #3b4b7c;
+  --strong: #f2f5fc;
+  --fg: #d0d8ec;
+  --muted: #a3b0d0;
+  --faint: #8e9cc0;
+  --accent: #22d3ee;
+  --accent-gradient: linear-gradient(90deg, #22d3ee, #8b5cf6);
   --up: #34c98b;
   --down: #f26d78;
   --warn: #e3a83a;
@@ -36,16 +45,19 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     color-scheme: light;
-    --canvas: #f4f6f8;
+    --canvas: #f6f8fe;
+    --canvas-end: #edf1fb;
+    --canvas-gradient: linear-gradient(160deg, var(--canvas), var(--canvas-end));
     --surface: #ffffff;
-    --raised: #edf0f4;
-    --line: #dde3ea;
-    --line-strong: #c0cad6;
-    --strong: #0d131a;
-    --fg: #29323f;
-    --muted: #4f5c6b;
-    --faint: #637082;
-    --accent: #1f56c4;
+    --raised: #eef1fa;
+    --line: #dbe1f0;
+    --line-strong: #bcc6de;
+    --strong: #0b1020;
+    --fg: #27304a;
+    --muted: #4a5470;
+    --faint: #5d6885;
+    --accent: #0e7490;
+    --accent-gradient: linear-gradient(90deg, #0e7490, #6d28d9);
     --up: #0d7a50;
     --down: #bf2f3d;
     --warn: #86570a;
@@ -55,16 +67,19 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --canvas: #f4f6f8;
+  --canvas: #f6f8fe;
+  --canvas-end: #edf1fb;
+  --canvas-gradient: linear-gradient(160deg, var(--canvas), var(--canvas-end));
   --surface: #ffffff;
-  --raised: #edf0f4;
-  --line: #dde3ea;
-  --line-strong: #c0cad6;
-  --strong: #0d131a;
-  --fg: #29323f;
-  --muted: #4f5c6b;
-  --faint: #637082;
-  --accent: #1f56c4;
+  --raised: #eef1fa;
+  --line: #dbe1f0;
+  --line-strong: #bcc6de;
+  --strong: #0b1020;
+  --fg: #27304a;
+  --muted: #4a5470;
+  --faint: #5d6885;
+  --accent: #0e7490;
+  --accent-gradient: linear-gradient(90deg, #0e7490, #6d28d9);
   --up: #0d7a50;
   --down: #bf2f3d;
   --warn: #86570a;
@@ -103,7 +118,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--canvas);
+  background: var(--canvas-gradient) fixed var(--canvas);
   color: var(--fg);
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
@@ -112,6 +127,12 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+/* A solid fill in the accent colour shows the gradient. Translucent tints (bg-accent/10) stay solid,
+   and a disabled control keeps its own plain colours. */
+.bg-accent:not(:disabled) {
+  background-image: var(--accent-gradient);
 }
 
 /* Visible keyboard focus everywhere. */

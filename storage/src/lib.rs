@@ -14,12 +14,14 @@ mod log;
 mod memtable;
 mod record;
 mod sstable;
+#[cfg(target_os = "linux")]
+pub mod uring;
 
 pub use bloom::Bloom;
 pub use database::Database;
 pub use error::DbError;
 pub use record::Trade;
-pub use sstable::SsTable;
+pub use sstable::{IoBackend, SsTable};
 
 #[cfg(feature = "python")]
 mod python;

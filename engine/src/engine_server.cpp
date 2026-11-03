@@ -1,6 +1,10 @@
 // engine_server: the TickForge matching engine as a TCP server.
 //
 //   engine_server --port 9100 --wal data/engine.wal [--max-qty 10000] [--band-pct 20]
+//                 [--pin | --no-pin] [--pin-core N]
+//                 [--queue lockfree|elastic] [--ring-size 65536]
+//                 [--wal-io write|uring]
+//                 [--replicate | --follow HOST:PORT]
 //
 // Protocol: one JSON object per line (see docs/CONTRACTS.md, section 2).
 //
@@ -9,13 +13,22 @@
 //   connection  one per client (a "producer"): parse, check, write the WAL,
 //               ack, push onto the queue
 //   matcher     the only thread that touches the order books
+//   follower    with --follow: reads WAL frames from the leader, logs them and
+//               queues them for the matcher, just like orders from a client
+//
+// A connection that sends {"type":"replicate"} to a leader becomes a WAL stream:
+// its thread reads the leader's WAL file and sends each complete frame, so a slow
+// follower never holds up the critical path. See docs/CONTRACTS.md, section 2.
 //
 // The order books are MapBook (std::map). DenseBook is not used here because
 // it only accepts prices inside a fixed range.
+#include "affinity.hpp"
+#include "elastic_ring.hpp"
 #include "json_lite.hpp"
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
 #include "replay.hpp"
+#include "uring.hpp"
 #include "wal.hpp"
 
 #include <algorithm>
@@ -28,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fcntl.h>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -35,6 +49,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -74,6 +89,7 @@ struct Conn {
   uint32_t id = 0;
   std::mutex write_mu;
   bool open = true; // guarded by write_mu
+  bool replica = false; // guarded by write_mu: now carries WAL frames, not JSON lines
   std::atomic<uint64_t> *produced = nullptr; // orders this connection submitted
 };
 
@@ -82,6 +98,14 @@ struct Options {
   std::string wal_path;
   int64_t max_qty = 10000;
   int64_t band_pct = 20;
+  bool pin = false;  // pin the matching thread to one core (--pin turns it on)
+  int pin_core = -1; // -1: choose automatically
+  bool elastic_queue = false; // ElasticRing instead of MPSCQueue
+  size_t ring_size = 1 << 16;
+  WalIo wal_io = WalIo::Write;
+  bool replicate = false;    // leader: serve WAL frames to followers
+  std::string follow_host;   // follower: read-only copy of this leader
+  int follow_port = 0;
 };
 
 // ---- small helpers ----------------------------------------------------------
@@ -159,10 +183,19 @@ static ProcInfo read_proc() {
 
 class Server {
 public:
-  explicit Server(const Options &opt) : opt_(opt), start_ns_(now_ns()), win_start_ns_(start_ns_) {
-    WalRecovery r = recover_exchange(opt_.wal_path, ex_);
+  explicit Server(const Options &opt, const tf_affinity::PinPlan &plan)
+      : opt_(opt), plan_(plan), start_ns_(now_ns()), win_start_ns_(start_ns_) {
+    if (opt_.elastic_queue) ring_ = std::make_unique<ElasticRing<Job>>(opt_.ring_size);
+    std::vector<Trade> ignored;
+    WalRecord last;
+    WalRecovery r = wal_recover(opt_.wal_path, [&](const WalRecord &rec) {
+      ignored.clear();
+      apply_record(ex_, rec, ignored);
+      last = rec;
+    });
     seq_ = r.last_seq;
-    wal_ = std::make_unique<WalWriter>(opt_.wal_path);
+    last_crc_ = r.records > 0 ? wal_frame_crc(last) : 0;
+    wal_ = std::make_unique<WalWriter>(opt_.wal_path, opt_.wal_io);
     std::fprintf(stderr, "engine: recovered %llu records, last_seq %llu, dropped %llu bytes\n",
                  (unsigned long long)r.records, (unsigned long long)r.last_seq,
                  (unsigned long long)r.dropped_bytes);
@@ -182,7 +215,16 @@ public:
       return 1;
     }
 
-    std::thread matcher([this] { matcher_loop(); });
+    std::thread matcher([this] {
+#ifdef __linux__
+      pthread_setname_np(pthread_self(), "tf-matcher");
+#endif
+      if (plan_.matcher_core >= 0) tf_affinity::set_current_thread({plan_.matcher_core});
+      matcher_loop();
+    });
+    // Connection threads start from this thread, so they inherit this set.
+    if (plan_.matcher_core >= 0) tf_affinity::set_current_thread(plan_.others);
+    if (following()) std::thread([this] { follower_loop(); }).detach();
     std::fprintf(stderr, "engine: listening on 127.0.0.1:%d\n", opt_.port);
 
     while (!g_stop.load()) {
@@ -227,7 +269,7 @@ private:
   // Send one line without ever blocking. A client that cannot keep up is dropped.
   static void send_line(Conn &c, const std::string &line) {
     std::lock_guard<std::mutex> g(c.write_mu);
-    if (!c.open) return;
+    if (!c.open || c.replica) return;
     const char *p = line.data();
     size_t left = line.size();
     while (left > 0) {
@@ -302,10 +344,15 @@ private:
     if (type == "new_order") on_new_order(c, m, ref);
     else if (type == "cancel") on_cancel(c, m, ref);
     else if (type == "command") on_command(c, m, ref);
+    else if (type == "replicate" && opt_.replicate) serve_replica(c, m, ref);
     else send_line(c, reject_json(ref, "bad_request"));
   }
 
   void on_new_order(Conn &c, const JsonObject &m, int64_t ref) {
+    if (following()) {
+      send_line(c, reject_json(ref, "read_only"));
+      return;
+    }
     int64_t symbol, price, qty;
     std::string side;
     if (!get_int(m, "symbol_id", symbol) || !get_int(m, "price", price) ||
@@ -362,6 +409,10 @@ private:
   }
 
   void on_cancel(Conn &c, const JsonObject &m, int64_t ref) {
+    if (following()) {
+      send_line(c, reject_json(ref, "read_only"));
+      return;
+    }
     int64_t order_id;
     if (!get_int(m, "order_id", order_id)) {
       send_line(c, reject_json(ref, "bad_request"));
@@ -434,25 +485,257 @@ private:
       std::fprintf(stderr, "engine: fatal: %s\n", e.what());
       std::_Exit(1);
     }
+    if (opt_.replicate) {
+      {
+        std::lock_guard<std::mutex> g(wal_mu_);
+        wal_appends_.fetch_add(1, std::memory_order_relaxed);
+      }
+      wal_cv_.notify_all();
+    }
   }
 
   void push(Job &job) {
     job.pushed_ns = now_ns();
     if (job.kind == Job::NewOrder || job.kind == Job::Cancel)
       submitted_.fetch_add(1, std::memory_order_relaxed);
-    queue_.enqueue(job);
+    if (ring_) ring_->enqueue(job);
+    else queue_.enqueue(job);
     if (sleeping_.load()) {
       std::lock_guard<std::mutex> g(wake_mu_); // pairs with the matcher's wait
       wake_cv_.notify_one();
     }
   }
 
+  // ---- replication: leader side ----
+
+  // Runs on the connection's own thread until the follower goes away.
+  void serve_replica(Conn &c, const JsonObject &m, int64_t ref) {
+    int64_t after_seq, after_crc;
+    if (!get_int(m, "after_seq", after_seq) || !get_int(m, "after_crc", after_crc) || after_seq < 0) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
+    uint64_t last;
+    {
+      std::lock_guard<std::mutex> g(ingress_mu_);
+      last = seq_;
+    }
+    // Everything up to `last` is complete in the file, because it was written under the lock.
+    if (static_cast<uint64_t>(after_seq) > last) {
+      send_line(c, reject_json(ref, "follower_ahead"));
+      return;
+    }
+    int fd = ::open(opt_.wal_path.c_str(), O_RDONLY);
+    if (fd < 0) {
+      send_line(c, reject_json(ref, "bad_request"));
+      return;
+    }
+    uint64_t pos = WAL_HEADER_SIZE;
+    if (!find_after(fd, static_cast<uint64_t>(after_seq), static_cast<uint32_t>(after_crc), pos)) {
+      ::close(fd);
+      send_line(c, reject_json(ref, "diverged"));
+      return;
+    }
+    {
+      // From here on this connection gets no more JSON lines, so the stream stays clean.
+      std::lock_guard<std::mutex> g(c.write_mu);
+      c.replica = true;
+      if (!send_all(c.fd, "{\"type\":\"replicate_ok\",\"last_seq\":" + std::to_string(last) + "}\n")) {
+        ::close(fd);
+        return;
+      }
+    }
+    replicas_.fetch_add(1);
+    std::fprintf(stderr, "engine: follower connected, sending frames after seq %lld\n", (long long)after_seq);
+    ship_frames(c, fd, pos);
+    replicas_.fetch_sub(1);
+    ::close(fd);
+    ::shutdown(c.fd, SHUT_RDWR); // ends the connection's read loop
+  }
+
+  // Move `pos` past the frame with seq `after_seq`, which must have CRC `after_crc`.
+  // This catches a follower of some other leader, and a leader that lost its tail. It
+  // compares only that one frame, not everything before it.
+  static bool find_after(int fd, uint64_t after_seq, uint32_t after_crc, uint64_t &pos) {
+    if (after_seq == 0) return true;
+    std::vector<char> buf(1 << 20);
+    for (;;) {
+      ssize_t n = ::pread(fd, buf.data(), buf.size(), static_cast<off_t>(pos));
+      if (n <= 0) return false;
+      size_t used = 0;
+      for (;;) {
+        WalRecord rec;
+        size_t len = 0;
+        WalFrame st = wal_decode_frame(buf.data() + used, static_cast<size_t>(n) - used, rec, len);
+        if (st == WalFrame::Corrupt) return false;
+        if (st == WalFrame::Incomplete) break;
+        used += len;
+        if (rec.seq == after_seq) {
+          pos += used;
+          return wal_frame_crc(rec) == after_crc;
+        }
+      }
+      if (used == 0) return false;
+      pos += used;
+    }
+  }
+
+  void ship_frames(Conn &c, int fd, uint64_t pos) {
+    std::vector<char> buf(1 << 20);
+    while (!g_stop.load()) {
+      const uint64_t seen = wal_appends_.load(std::memory_order_relaxed);
+      ssize_t n = ::pread(fd, buf.data(), buf.size(), static_cast<off_t>(pos));
+      if (n < 0) return;
+      // Only whole frames: a frame being written right now is sent next time round.
+      size_t ready = 0;
+      while (ready < static_cast<size_t>(n)) {
+        WalRecord rec;
+        size_t len = 0;
+        WalFrame st = wal_decode_frame(buf.data() + ready, static_cast<size_t>(n) - ready, rec, len);
+        if (st == WalFrame::Incomplete) break;
+        if (st == WalFrame::Corrupt) {
+          std::fprintf(stderr, "engine: corrupt WAL frame at offset %llu, stopping replication\n",
+                       (unsigned long long)(pos + ready));
+          return;
+        }
+        ready += len;
+      }
+      if (ready > 0) {
+        if (!send_all(c.fd, std::string(buf.data(), ready))) return;
+        pos += ready;
+        continue;
+      }
+      // Nothing new. Notice a follower that left, then wait for the next append.
+      char probe;
+      ssize_t got = ::recv(c.fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
+      if (got == 0 || (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) return;
+      std::unique_lock<std::mutex> lk(wal_mu_);
+      wal_cv_.wait_for(lk, std::chrono::milliseconds(20),
+                       [&] { return wal_appends_.load(std::memory_order_relaxed) != seen; });
+    }
+  }
+
+  // Blocking send of the whole string, for the WAL stream. False if the peer is gone.
+  static bool send_all(int fd, const std::string &data) {
+    const char *p = data.data();
+    size_t left = data.size();
+    while (left > 0) {
+      ssize_t n = ::send(fd, p, left, MSG_NOSIGNAL);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) return false;
+      p += n;
+      left -= static_cast<size_t>(n);
+    }
+    return true;
+  }
+
+  // ---- replication: follower side ----
+
+  bool following() const { return opt_.follow_port != 0; }
+
+  void follower_loop() {
+    while (!g_stop.load()) {
+      int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+      sockaddr_in addr{};
+      addr.sin_family = AF_INET;
+      addr.sin_port = htons(static_cast<uint16_t>(opt_.follow_port));
+      ::inet_pton(AF_INET, opt_.follow_host.c_str(), &addr.sin_addr);
+      if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0) {
+        leader_connected_.store(true);
+        follow_stream(fd);
+        leader_connected_.store(false);
+      }
+      ::close(fd);
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
+
+  // A problem that retrying cannot fix: stop, so that a supervisor or a person notices.
+  [[noreturn]] static void follower_fatal(const std::string &why) {
+    std::fprintf(stderr, "engine: follower stopping: %s\n", why.c_str());
+    std::_Exit(3);
+  }
+
+  // Returns when the leader goes away or sends something damaged; the caller reconnects.
+  void follow_stream(int fd) {
+    uint64_t after_seq;
+    uint32_t after_crc;
+    {
+      std::lock_guard<std::mutex> g(ingress_mu_);
+      after_seq = seq_;
+      after_crc = last_crc_;
+    }
+    if (!send_all(fd, "{\"type\":\"replicate\",\"client_ref\":0,\"after_seq\":" + std::to_string(after_seq) +
+                          ",\"after_crc\":" + std::to_string(after_crc) + "}\n"))
+      return;
+
+    std::string buf;
+    std::vector<char> tmp(1 << 16);
+    bool streaming = false;
+    while (!g_stop.load()) {
+      ssize_t n = ::recv(fd, tmp.data(), tmp.size(), 0);
+      if (n <= 0) return;
+      buf.append(tmp.data(), static_cast<size_t>(n));
+
+      // Before the stream starts the leader may still send trade lines; skip them.
+      size_t pos;
+      while (!streaming && (pos = buf.find('\n')) != std::string::npos) {
+        std::string line = buf.substr(0, pos);
+        buf.erase(0, pos + 1);
+        if (line.find("\"type\":\"replicate_ok\"") != std::string::npos) streaming = true;
+        else if (line.find("\"type\":\"reject\"") != std::string::npos)
+          follower_fatal("the leader refused: " + line);
+      }
+      if (!streaming) continue;
+
+      size_t used = 0;
+      for (;;) {
+        WalRecord rec;
+        size_t len = 0;
+        WalFrame st = wal_decode_frame(buf.data() + used, buf.size() - used, rec, len);
+        if (st == WalFrame::Incomplete) break;
+        if (st == WalFrame::Corrupt) {
+          std::fprintf(stderr, "engine: damaged frame from the leader, reconnecting\n");
+          damaged_frames_.fetch_add(1);
+          return;
+        }
+        apply_replicated(rec);
+        used += len;
+      }
+      buf.erase(0, used);
+    }
+  }
+
+  // Same order as for a client's order: log first, then queue for the matcher.
+  void apply_replicated(const WalRecord &rec) {
+    std::lock_guard<std::mutex> g(ingress_mu_);
+    if (rec.seq != seq_ + 1)
+      follower_fatal("expected seq " + std::to_string(seq_ + 1) + " from the leader, got " + std::to_string(rec.seq));
+    seq_ = rec.seq;
+    last_crc_ = wal_frame_crc(rec);
+    write_wal(rec);
+
+    Job job;
+    job.conn_id = 0; // no connection has this id, so nobody is sent an ack
+    if (rec.type == WalRecord::NewOrder) {
+      job.kind = Job::NewOrder;
+      job.order = to_order(rec);
+    } else {
+      job.kind = Job::Cancel;
+      job.order.seq = rec.seq;
+      job.cancel_id = rec.order_id;
+    }
+    push(job);
+  }
+
   // ---- matching thread ----
+
+  bool next_job(Job &job) { return ring_ ? ring_->dequeue(job) : queue_.dequeue(job); }
 
   void matcher_loop() {
     Job job;
     for (;;) {
-      if (queue_.dequeue(job)) {
+      if (next_job(job)) {
         process(job);
         continue;
       }
@@ -460,7 +743,7 @@ private:
       // Queue is empty: sleep until a producer wakes us (or 10 ms pass).
       std::unique_lock<std::mutex> lk(wake_mu_);
       sleeping_.store(true);
-      if (queue_.dequeue(job)) { // something arrived just before we went to sleep
+      if (next_job(job)) { // something arrived just before we went to sleep
         sleeping_.store(false);
         lk.unlock();
         process(job);
@@ -581,18 +864,41 @@ private:
                   "\"state_hash\":\"%s\"}\n",
                   proc.threads, cpu_pct_, proc.rss_mb, (unsigned long long)ex_.last_seq(),
                   hash_hex(ex_.state_hash()).c_str());
-    return std::string(head) + "\"lat_hist\":" + hist + ",\"producers\":" + producers + tail;
+    // Only with --queue elastic, so the default reply is unchanged.
+    std::string ring_stats;
+    if (ring_)
+      ring_stats = ",\"ring_capacity\":" + std::to_string(ring_->capacity()) +
+                   ",\"ring_overflowed\":" + std::to_string(ring_->overflowed_total());
+    // Only with replication turned on, so the default reply is unchanged.
+    if (opt_.replicate) ring_stats += ",\"role\":\"leader\",\"replicas\":" + std::to_string(replicas_.load());
+    if (following())
+      ring_stats += std::string(",\"role\":\"follower\",\"leader_connected\":") +
+                    (leader_connected_.load() ? "true" : "false") +
+                    ",\"damaged_frames\":" + std::to_string(damaged_frames_.load());
+    return std::string(head) + "\"lat_hist\":" + hist + ",\"producers\":" + producers + ring_stats + tail;
   }
 
   // ---- data ----
 
   Options opt_;
+  tf_affinity::PinPlan plan_;
   Exchange<MapBook> ex_;            // touched by the matching thread only (and recovery)
   std::unique_ptr<WalWriter> wal_;  // guarded by ingress_mu_
   uint64_t seq_ = 0;                // guarded by ingress_mu_
+  uint32_t last_crc_ = 0;           // follower only: of the frame with seq_, for the handshake
   std::mutex ingress_mu_;
 
+  // Replication.
+  static constexpr uint64_t WAL_HEADER_SIZE = 8;
+  std::mutex wal_mu_;
+  std::condition_variable wal_cv_;
+  std::atomic<uint64_t> wal_appends_{0};
+  std::atomic<int> replicas_{0};
+  std::atomic<bool> leader_connected_{false};
+  std::atomic<uint64_t> damaged_frames_{0}; // a follower recovers from these by reconnecting
+
   MPSCQueue<Job> queue_;
+  std::unique_ptr<ElasticRing<Job>> ring_; // used instead of queue_ with --queue elastic
   std::mutex wake_mu_;
   std::condition_variable wake_cv_;
   std::atomic<bool> sleeping_{false};
@@ -622,14 +928,46 @@ private:
 static bool parse_args(int argc, char **argv, Options &opt) {
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
+    if (a == "--pin" || a == "--no-pin") {
+      opt.pin = a == "--pin";
+      continue;
+    }
+    if (a == "--replicate") {
+      opt.replicate = true;
+      continue;
+    }
     if (i + 1 >= argc) return false;
     std::string v = argv[++i];
     if (a == "--port") opt.port = std::atoi(v.c_str());
     else if (a == "--wal") opt.wal_path = v;
     else if (a == "--max-qty") opt.max_qty = std::atoll(v.c_str());
     else if (a == "--band-pct") opt.band_pct = std::atoll(v.c_str());
+    else if (a == "--queue") {
+      if (v != "lockfree" && v != "elastic") return false;
+      opt.elastic_queue = v == "elastic";
+    } else if (a == "--wal-io") {
+      if (v != "write" && v != "uring") return false;
+      opt.wal_io = v == "uring" ? WalIo::Uring : WalIo::Write;
+    } else if (a == "--ring-size") {
+      long long n = std::atoll(v.c_str());
+      if (n < 2 || n > (1LL << 30)) return false;
+      opt.ring_size = static_cast<size_t>(n);
+    } else if (a == "--pin-core") {
+      opt.pin = true;
+      opt.pin_core = std::atoi(v.c_str());
+    } else if (a == "--follow") {
+      size_t colon = v.rfind(':');
+      if (colon == std::string::npos) return false;
+      opt.follow_host = v.substr(0, colon);
+      opt.follow_port = std::atoi(v.c_str() + colon + 1);
+      in_addr check{};
+      if (opt.follow_port <= 0 || opt.follow_port > 65535 ||
+          ::inet_pton(AF_INET, opt.follow_host.c_str(), &check) != 1)
+        return false;
+    }
     else return false;
   }
+  if (opt.follow_port != 0 && opt.replicate) return false; // no chains: not tested
   return !opt.wal_path.empty() && opt.port > 0 && opt.port < 65536 && opt.max_qty > 0 &&
          opt.band_pct > 0;
 }
@@ -639,14 +977,31 @@ int main(int argc, char **argv) {
   if (!parse_args(argc, argv, opt)) {
     std::fprintf(stderr,
                  "usage: engine_server --wal <file> [--port 9100] [--max-qty 10000] "
-                 "[--band-pct 20]\n");
+                 "[--band-pct 20] [--pin | --no-pin] [--pin-core N] "
+                 "[--queue lockfree|elastic] [--ring-size 65536] [--wal-io write|uring] "
+                 "[--replicate | --follow HOST:PORT]\n");
     return 2;
   }
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
   std::signal(SIGPIPE, SIG_IGN);
   try {
-    Server server(opt);
+    if (opt.wal_io == WalIo::Uring) {
+      std::string why;
+      if (!UringWriter::supported(&why)) { // asked for by name, so do not quietly use something else
+        std::fprintf(stderr, "engine: --wal-io uring is not available here: %s\n", why.c_str());
+        return 2;
+      }
+    }
+    tf_affinity::PinPlan plan;
+    if (opt.pin) {
+      plan = tf_affinity::make_plan(tf_affinity::allowed_cpus(), opt.pin_core, tf_affinity::smt_siblings);
+      std::fprintf(stderr, "engine: pinning: %s\n", plan.note.c_str());
+      // An explicit core that cannot be used is a mistake; the automatic choice
+      // just runs unpinned on a machine with too few CPUs.
+      if (opt.pin_core >= 0 && plan.matcher_core < 0) return 2;
+    }
+    Server server(opt, plan);
     return server.run();
   } catch (const std::exception &e) {
     std::fprintf(stderr, "engine: %s\n", e.what());

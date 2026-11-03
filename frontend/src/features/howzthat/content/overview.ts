@@ -101,8 +101,8 @@ export const SYSTEM_PROBLEMS: Problem[] = [
   {
     title: "OS scheduling and network-stack jitter",
     text: "The scheduler, the kernel network stack and the page cache add jitter to P99 and P99.99.",
-    today: "Threads are not pinned; orders arrive over a local TCP socket (127.0.0.1:9100), not a real network. Core pinning, io_uring and XDP are future work.",
-    status: "planned",
+    today: "Pinning the matching thread to one core is built but off by default, because it showed no measurable gain on this virtual machine. Orders still arrive over a local TCP socket (127.0.0.1:9100), not a real network. io_uring is built but off by default because it measured slower here; XDP is future work.",
+    status: "partial",
   },
 ];
 
@@ -189,7 +189,7 @@ export const RESEARCH_AREAS: ResearchArea[] = [
     finding: "The LSM-tree buffers writes in memory and merges sorted runs on disk; SILK studies the latency spikes compaction causes; Monkey and Dostoevsky tune filters and merge policy.",
     relevance: "The trade store, and the risk that compaction hurts matching latency.",
     decision: "Built: a MemTable (BTreeMap), binary SSTables with a sparse index, a Bloom filter and a CRC-32 footer, and one size-tiered compaction. Planned: an atomic MemTable swap and compaction throttled by queue depth.",
-    gap: "get_trade scans a table's data when the filter says maybe (no per-table id index); no Rust-side benchmarks; compaction's effect on latency is not measured.",
+    gap: "get_trade scans a table's data when the filter says maybe (no per-table id index); no read benchmarks; compaction's effect on latency is not measured.",
     status: "partial",
     papers: ["oneil-1996-lsm-tree", "silk-2019", "bloom-1970"],
     pdfOnly: ["Luo and Carey (2020), LSM-based storage techniques: a survey", "Dayan and Idreos (2018), Dostoevsky", "Dayan, Athanassoulis and Idreos (2017), Monkey"],
@@ -200,7 +200,7 @@ export const RESEARCH_AREAS: ResearchArea[] = [
     finding: "Dean and Barroso show how variability is amplified at scale and argue for tail-tolerant design; Budish et al. explain why speed matters in electronic markets.",
     relevance: "Why TickForge reports percentiles and a histogram instead of an average.",
     decision: "A latency histogram with p50 and p99 in the stats stream, and a benchmark that reports P50 and P99.",
-    gap: "Power-of-two buckets only give upper bounds; no p99.9 / p99.99; the benchmark ran on one machine with unpinned threads.",
+    gap: "Power-of-two buckets only give upper bounds; no p99.9 / p99.99; the benchmarks ran on one machine, and the queue and book benchmarks do not pin threads.",
     status: "partial",
     papers: ["dean-barroso-2013-tail-at-scale"],
     pdfOnly: ["Budish, Cramton and Shim (2015), The high-frequency trading arms race"],

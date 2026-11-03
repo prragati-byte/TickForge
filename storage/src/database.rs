@@ -2,7 +2,7 @@ use crate::error::DbError;
 use crate::log::Log;
 use crate::memtable::MemTable;
 use crate::record::Trade;
-use crate::sstable::SsTable;
+use crate::sstable::{IoBackend, SsTable};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,8 @@ pub struct Database {
     next_number: u64,
     /// Number of distinct trade ids.
     distinct: u64,
+    /// How flush and compaction write their files.
+    io: IoBackend,
 }
 
 fn table_path(dir: &Path, number: u64) -> PathBuf {
@@ -34,6 +36,13 @@ impl Database {
     /// Open the directory (creating it if needed): load the SSTables, then
     /// replay the log into the memtable.
     pub fn open(dir: &Path) -> Result<Database, DbError> {
+        Self::open_with(dir, IoBackend::Standard)
+    }
+
+    /// The same, choosing how flush and compaction write their files. Fails if the
+    /// backend cannot be used here, instead of quietly using another one.
+    pub fn open_with(dir: &Path, io: IoBackend) -> Result<Database, DbError> {
+        io.check()?;
         fs::create_dir_all(dir)?;
 
         let mut numbers = Vec::new();
@@ -77,6 +86,7 @@ impl Database {
             next_number: numbers.last().map_or(1, |n| n + 1),
             tables,
             distinct: ids.len() as u64,
+            io,
         })
     }
 
@@ -163,7 +173,7 @@ impl Database {
             return Ok(());
         }
         let path = table_path(&self.dir, self.next_number);
-        SsTable::write(&path, &self.mem.sorted())?;
+        SsTable::write_with(&path, &self.mem.sorted(), self.io)?;
         let table = SsTable::open(&path)?;
         self.tables.push((self.next_number, table));
         self.next_number += 1;
@@ -216,7 +226,7 @@ impl Database {
 
         let number = self.tables[first + len - 1].0;
         let path = table_path(&self.dir, number);
-        SsTable::write(&path, &merged)?; // replaces the newest input file atomically
+        SsTable::write_with(&path, &merged, self.io)?; // replaces the newest input file atomically
         let new_table = SsTable::open(&path)?;
 
         for (n, _) in &self.tables[first..first + len - 1] {

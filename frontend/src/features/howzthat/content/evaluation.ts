@@ -47,8 +47,8 @@ export const EXPERIMENTS: Experiment[] = [
     metric: "Peak queue depth, time to drain, P99 during and after the burst.",
     procedure: "Inject bursts from all producers; sample queue depth and latency every few milliseconds.",
     interpretation: "Shows whether an unbounded queue hides overload (memory growth) instead of handling it.",
-    status: "not-measured",
-    needs: "A burst mode in the load generator.",
+    status: "first-run",
+    needs: "Measured for the queues alone (docs/BENCHMARKS.md). A burst mode in the whole-server load generator is still missing.",
   },
   {
     id: "pinning",
@@ -58,8 +58,8 @@ export const EXPERIMENTS: Experiment[] = [
     variable: "Core affinity on/off.",
     metric: "P99 and P99.99 latency.",
     procedure: "Same load, with and without affinity, on an otherwise idle machine.",
-    interpretation: "Quantifies scheduler jitter on this machine.",
-    status: "blocked",
+    interpretation: "Quantifies scheduler jitter on this machine. Result: no measurable effect, with small differences that change sign from run to run (docs/BENCHMARKS.md), so it is off by default; on WSL2 the pin is to a virtual CPU.",
+    status: "first-run",
     needs: "Core affinity is not implemented.",
   },
   {
@@ -118,22 +118,23 @@ export const RESULTS: ResultRow[] = [
 
 /** Correctness evidence from the test suite (./build.sh test), re-run on Linux (WSL2) on 3 Nov 2026. */
 export const EVIDENCE: { title: string; result: string; how: string }[] = [
-  { title: "Engine tests (ctest)", result: "PASS · 6 / 6", how: "Order book, WAL recovery, queue stress, engine end-to-end with kill -9, and the queue stress test under ThreadSanitizer and under AddressSanitizer." },
+  { title: "Engine tests (ctest)", result: "PASS · 19 / 19", how: "Order book, WAL recovery, queue stress, engine end-to-end with kill -9, core pinning, the elastic ring, the WAL through io_uring and leader to follower replication. The queue, the elastic ring and the server with kill -9 also run under ThreadSanitizer and under AddressSanitizer." },
   { title: "Crash recovery", result: "PASS · same state hash after kill -9", how: "engine/tests/wal_recovery_test.cpp: replay equals live, file cut at every byte offset, bit-flip detection, writer killed with SIGKILL. The end-to-end test kills the server and compares the hash after restart." },
-  { title: "Database tests", result: "PASS · 25 Rust + 6 Python", how: "Memtable, SSTable (every byte flipped is caught), Bloom filter, compaction, and the TickForgeDB Python module." },
+  { title: "Database tests", result: "PASS · 28 Rust + 8 Python", how: "Memtable, SSTable (every byte flipped is caught), Bloom filter, compaction, and the TickForgeDB Python module." },
   { title: "Service and frontend tests", result: "PASS · 17 + 19 + 26", how: "exchange-api pytest 17, market-data pytest 19 (Yahoo is mocked, no network), frontend typecheck and vitest 26." },
 ];
 
 // ---- 09 Limitations and future work --------------------------------------------------------------------
 
 export const LIMITATIONS = [
-  "The benchmarks are a first run on one machine with unpinned threads. The lock-free queue did not beat the mutex queue on raw throughput; only its enqueue P99 was lower at 4 and 8 producers.",
+  "The queue and book benchmarks are a first run on one machine with unpinned threads. The lock-free queue did not beat the mutex queue on raw throughput; only its enqueue P99 was lower at 4 and 8 producers.",
   "The engine log is not fsynced: it survives a killed process but not a power cut. No snapshots.",
-  "The database has no per-table id index (get_trade scans), no Rust-side benchmarks, and compaction is not throttled by queue depth.",
+  "The database has no per-table id index (get_trade scans), no read benchmarks, and compaction is not throttled by queue depth.",
   "Limit orders only: no market orders or modifications (cancel is supported).",
   "The server uses the std::map book; the faster dense-array book only accepts a fixed price range.",
   "Latency percentiles are power-of-two bucket bounds; no p99.9 / p99.99.",
-  "Not built: eBPF/XDP, io_uring, core pinning, elastic dual ring, multi-node, memory pools, huge pages, FIX/SBE message encoding.",
+  "Built but not the default, because they measured slower or no better here: core pinning, io_uring, the elastic dual ring, leader to follower replication (asynchronous, localhost only, no automatic failover).",
+  "Not built: eBPF/XDP, memory pools, huge pages, FIX/SBE message encoding.",
   "The virtual traders use paper money, and resting orders do not reserve cash or shares.",
   "The engine has only been built and tested on Linux (WSL2).",
   "The research pages are drafts until a teammate who has read each paper signs them off.",

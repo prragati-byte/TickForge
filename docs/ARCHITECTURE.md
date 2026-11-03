@@ -12,6 +12,8 @@ The exact messages, file formats and API are in [CONTRACTS.md](CONTRACTS.md). Th
 
 Connection threads parse and validate orders, write them to the write-ahead log, acknowledge them, and push them onto a lock-free queue. One matching thread owns every order book, applies price-time priority, and broadcasts trades. On restart the log is replayed through the same matching code, which rebuilds the same book (`state_hash` lets a test prove it).
 
+Options, all described in [CONTRACTS.md](CONTRACTS.md) section 2: `--pin` puts the matching thread on its own core; `--queue elastic` replaces the linked-list queue with a ring plus overflow; `--wal-io uring` writes the WAL through io_uring; `--replicate` and `--follow` ship the WAL to a read-only follower. All of them are off by default. [DECISIONS.md](DECISIONS.md) and [BENCHMARKS.md](BENCHMARKS.md) say why.
+
 ## exchange-api (Python)
 
 `app/main.py` holds the live state, `app/routes.py` the HTTP and WebSocket endpoints.

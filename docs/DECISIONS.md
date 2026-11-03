@@ -76,3 +76,83 @@ Both versions pass `queue_stress_test` under ThreadSanitizer and AddressSanitize
 - **Compaction merges neighbours only.** Tables are ordered by file number and newer wins. Merging two tables with an older one in between could bring back an old copy of a replaced trade. `compact()` therefore takes the longest run of adjacent tables whose sizes are within 4x of each other, writes the result over the newest input's file number, then deletes the others. The memtable also flushes by itself at 10,000 trades, and a flush that leaves 8 or more tables triggers a compaction.
 - **`get_trade` on an SSTable scans the data section** when the Bloom filter and the min/max id say "maybe", because the file is sorted by time, not by id. Misses (most lookups) never touch the disk. Planned: an id index per table.
 - **`count()`** is kept as a number: computed once at open (one pass over all tables), then +1 for every insert of a new id.
+
+## Core pinning
+
+- **Built, off by default.** `--pin` turns it on, `--pin-core N` chooses the core and `--no-pin` turns it off. The request was for a disable flag, which suggests on by default, but the rule for this work was that a feature stays off unless it shows no regression, and it did not clearly pass that.
+- **The default changed during the work, and the reason matters.** It first went on by default after a 15-run comparison favoured pinning (matcher P99 1234 against 1504 us). That run overlapped with other work on the machine. On the idle machine, the next 15-run comparison went the other way (RTT P50 132 against 122 us, P99.9 931 against 810 us). A 30-run comparison on the idle machine then came out level: RTT P50 135 against 139 us, P99 475 against 460 us, P99.9 968 against 927 us, matcher P99 297 against 295 us. The 30-run comparison in `docs/BENCHMARKS.md`, from the final run, came out level again with the small differences the other way (RTT P99 474 against 477 us). So: no measurable effect in either direction, with differences that change sign from run to run. An earlier 5-run comparison was also unstable (1470 against 766 us). A feature with no shown benefit does not earn a place in the default.
+- **Why it may not help here.** WSL2 pins to a virtual CPU, and Hyper-V still moves that between physical cores. A bare-metal run with `isolcpus` is what would really test the idea, and it could reverse this.
+- **Why the last CPU.** The kernel keeps most interrupts and housekeeping on the low-numbered CPUs. `--pin-core` overrides it.
+- **Only the matcher gets a core of its own.** Connection threads can be up to 100, so they share the remaining CPUs. They inherit that set from the main thread.
+- **Pinning is not isolation.** Without `isolcpus` the kernel can still schedule other processes on that core.
+- **A benchmark finding, separate from pinning.** At full closed-loop load (4 connections, about 18,000 orders/s) the matcher is the bottleneck: its P50 reaches about 2 s of queue backlog, because it sends each trade to every client from the matching thread. RTT stays low because the ack is sent before matching. So `server_bench` has a paced mode, and the matcher columns only mean "latency" when the load is paced.
+
+## MySQL baseline
+
+- **Real MySQL, no root.** `run.py` unpacks the Ubuntu packages into `.run/mysql`, so nothing is installed on the system, as with the rest of `build.sh`. `TICKFORGE_MYSQLD` points it at another `mysqld`.
+- **Separate crate.** `bench/mysql_baseline` has its own `Cargo.toml`, so `storage/` and `./build.sh test` never depend on a MySQL client.
+- **Same durability is the only fair row.** Following section 11.6 of the project document: TickForge's database acknowledges before fsync, so it is compared with MySQL at `innodb_flush_log_at_trx_commit=2`. The `flush=1, sync_binlog=1` row is shown for reference, labelled as stronger. Commits there took about 7 ms on this virtual disk, so it uses 5,000 trades instead of 200,000.
+- **Settings chosen in MySQL's favour.** Autocommit (one socket round trip per commit; the first version used `BEGIN` / `INSERT` / `COMMIT` and paid three), performance schema off, a Unix socket.
+- **What the numbers say.** One trade per commit, about 55x MySQL's best fair row, most of that because a function call replaces a socket round trip. In batches of 100, about 4x. **P99.99 is not better:** 7 ms against 7 to 17 ms singly, 76 ms against 38 to 86 ms in batches, because flush and compaction run on the insert path. This is the cost the activity-aware compaction idea is meant to address.
+- **Bytes written come from `/proc/diskstats`.** This WSL2 kernel has no `/proc/<pid>/io` (the first run reported 0 for everything, and those numbers were thrown away), so the count is the whole disk, which needs an idle machine.
+- **Recovery test size.** 99,999 trades, one short of a memtable flush. The first attempt used 100,000, which left the log empty and made TickForge's recovery look better than its worst case.
+- **Not explained.** MySQL without the binlog came out slower than with it, in both full runs (3,990 against 5,312 trades/s). The no-binlog configuration always ran first and the order was not varied, so this may be an artefact. Do not read it as a finding about MySQL.
+- **P99.99 of the batch rows** comes from 2,000 commits, so it is close to the single worst commit.
+- **MyRocks not run.** It is the closer LSM baseline according to the project document, but it is not in the Ubuntu packages.
+
+## Elastic dual ring
+
+- **One ticket counter instead of two modes.** The usual design has a "ring mode" and an "overflow mode", and the hard part is switching back without reordering. Here every enqueue takes a ticket with `fetch_add` and the consumer always takes tickets in order, wherever each item went. An item in overflow can never be overtaken, because the consumer does not move past its ticket. There is no switch.
+- **Why order matters here.** The server needs queue order to be `seq` order, or replay gives a different state hash. `elastic_ring_test` feeds real orders through a ring of 2 and compares the state hash with direct matching.
+- **Overflow is a Treiber stack of single nodes, not the segmented buffer in the project document.** The consumer takes the whole stack with `exchange` and files nodes by ticket in a private hash map. Nothing is popped singly, so there is no ABA problem and no hazard pointers. Segments would need memory reclamation on a path that only runs during a burst.
+- **Off by default.** The queue alone is much faster (3.3x to 8.4x throughput, enqueue P99 8x to 34x lower, in the final run in `docs/BENCHMARKS.md`, because normal flow allocates nothing). Through the whole server, the difference is inside the noise: `ingress_mu_` serialises the orders and the sockets take the time. So there is no regression, but no gain that would justify changing the default on the critical path, and it preallocates about 6 MB.
+- **Testing the tests.** Five bugs were put into copies of the ring: relaxed ordering on publish, wrong overflow order, wrong slot sequence, a leaked node, overwriting a full slot. All five were caught (TSan, the order check, the order check, ASan, a hang). A broken ring can hang, so these tests have a timeout. Then 45 runs of the stress test (normal, TSan, ASan) and 15 rounds of the server tests under both sanitizers, no failures.
+- **The server is now also tested under the sanitizers**, which it was not before: `engine_e2e_elastic_thread` and `_address` run the real `engine_server` with the crash test driving it, and fail if a sanitizer prints anything.
+- **A known limit.** A producer stopped between taking its ticket and publishing holds up the consumer until it runs again. Nothing is lost. In the server, orders are enqueued under `ingress_mu_` anyway.
+
+## io_uring for storage
+
+- **Kernel support, checked first.** `CONFIG_IO_URING=y`, `kernel.io_uring_disabled=0`, and creating a ring works on this kernel (6.18, WSL2). Both code paths check by really creating a ring, because containers can block the system call on a kernel that has it. Asking for io_uring where it cannot work is a startup error, not a quiet fallback.
+- **No liburing.** `liburing-dev` is not installed and `build.sh` does not install things, so the C++ side uses the system calls directly (`engine/src/uring.cpp`). The Rust side uses the `io-uring` crate, Linux only.
+- **Two places, because storage means two things here.** The engine WAL, which the critical path waits on, and SSTable writes for flush and compaction, which is what the project document asks for ("io_uring with O_DIRECT compaction"). The database's own log still uses `write()`: it is small writes through a Python call, where io_uring has nothing to batch.
+- **Measured slower, so off by default.** WAL append: 37 us against 0.5 us per frame, about 70x. Whole server at full load: 9,966 against 17,870 orders/s. RTT P50 at paced load: 273 against 134 us. SSTable and compaction writes: 10 to 18% slower (200 against 170 ms for 1,000,000 trades).
+- **Why the WAL is so slow.** An `iou-wrk` kernel thread was present in all 10 samples taken under load, with about 3 context switches per order. So the writes go through a kernel worker thread instead of finishing inside the system call. The likely reason is that a buffered append on ext4 cannot be done without blocking; that part was not checked further. The engine cannot batch to win this back, because an order must be logged before its ack and acks go out one at a time. A different file system or a group-commit design might change this; neither was tried.
+- **One side effect worth noting.** With `--wal-io uring` at full load the matcher is no longer saturated (P50 22 us, against seconds of backlog), because the slower WAL holds the input rate below what the matcher can take. That is back-pressure from a slower log, not an improvement.
+- **What was not measured.** O_DIRECT is meant to keep a large compaction from evicting the page cache and to make its I/O less disruptive to the rest of the machine. Time per file does not show that, and a benchmark under memory pressure was not done. So "slower" is the whole result here for now, not the last word on compaction.
+- **Short writes and errors.** A short write continues where it stopped. A failed SSTable write stops new requests and waits for the ones in flight before returning, so the buffer is never freed while the kernel may read it. `EINVAL` from O_DIRECT (tmpfs, for example) repeats the write without it.
+
+## Replication
+
+- **WAL shipping, because the engine is already a replicated state machine in waiting.** Same inputs in the same order give the same state, which is what the crash recovery relies on. A follower runs the same matching code on the same frames.
+- **The shipper reads the file, not a queue.** Each follower has a thread on the leader that reads the WAL file from its position and sends whole frames. A slow or absent follower costs the critical path nothing and needs no buffer: the backlog is the WAL. A new follower catches up the same way live ones are served.
+- **Asynchronous.** Waiting for a follower before the ack would add a network round trip on the critical path. The price: an acknowledged order can be missing from the follower if the leader's disk is lost. Since neither node fsyncs, a power cut can lose data on both.
+- **Same port, a new message type.** No second port to configure. `--replicate` is required, so a server without it answers `bad_request` exactly as before.
+- **Followers refuse to run on a bad history.** The handshake compares the CRC of the follower's last frame with the leader's frame at that seq. A follower ahead of its leader, or with other data at that point, exits with code 3 rather than serve wrong numbers. This checks one frame, not the entire file.
+- **No automatic failover, no chains.** Choosing a new leader safely needs a consensus protocol, which was not in scope. Promotion is manual: restart the follower without `--follow`; the test covers this. `--replicate` with `--follow` together is refused because it is not tested.
+- **What the test proves.** Same state hash, same books and a byte-identical WAL, after: catch-up, live flow, 4 clients at once, `kill -9` of the follower under load, `kill -9` of the leader under load, and a restart. All of it also under TSan and ASan (10 runs each) and 20 plain runs, no failures.
+- **Testing the test.** Six bugs were put into copies of the server. Three were caught at once: no WAL on the follower, dropped cancels, followers taking orders. Missing CRC check showed up as a hang (the timeout catches it). One is harmless: without the `follower_ahead` check, the next check refuses that follower as `diverged`. **One got through at first:** JSON lines mixed into the WAL stream, because the follower reconnects after a damaged frame and still ends up correct. So the follower now counts `damaged_frames` and the test requires 0; that catches it.
+- **Cost, measured on one machine.** `--replicate` with no follower: nothing consistent (RTT P50 150 against 124 us in the final run, but 143 against 153 and 122 against 122 in two others). With a follower on the same machine: RTT P50 124 to 164 us at paced load; at full load 16,082 to 11,720 orders/s. The follower had everything about 1 ms after the last ack. This is why it is off by default. Localhost only: a real network was not tested.
+
+## AF_XDP: feasibility only, not built
+
+Checked on this machine (WSL2, kernel 6.18) with `engine/tools/af_xdp_probe.c`, which tries each step for real.
+
+| Step | Normal user | User and network namespace (`unshare -Urn`), veth pair |
+|---|---|---|
+| Kernel config: `XDP_SOCKETS`, `VETH`, `BPF_SYSCALL`, `BPF_JIT` | all `y` | all `y` |
+| Create a veth pair | no | yes |
+| `socket(AF_XDP)` | `EPERM` | yes |
+| UMEM, fill, completion, RX and TX rings | | yes |
+| Bind to veth in copy mode (what generic / skb XDP uses) | | yes |
+| Create an `XSKMAP` | | `EPERM` |
+| Load an XDP program | | `EPERM` |
+
+- **Result: it cannot be tested here, so it stays planned, not built.** A socket can be bound, but it can only receive through an XDP program that redirects packets into an `XSKMAP`, and loading BPF needs real privileges: a user namespace does not grant them, `kernel.unprivileged_bpf_disabled` is 2, and sudo here asks for a password.
+- **With root it may well work:** nothing found rules it out, but that part was not run, so it is not claimed. To check, run the probe as root on a veth device.
+- **It would not fit today's engine anyway.** Orders arrive over TCP on 127.0.0.1. AF_XDP takes raw packets from a device, so it would need its own ingress protocol, and loopback traffic would not go through it.
+
+## Aurora theme
+
+- **Tokens only, plus two lines of CSS, because a gradient is not a colour.** `--accent` is used for text, borders and charts, so it stays one solid colour, and `--accent-gradient` and `--canvas-gradient` are new tokens. Two rules in `index.css` apply them: `body` and `.bg-accent:not(:disabled)`. No component changed. Without `:not(:disabled)`, the gradient covers the plain colour a disabled button sets, which a screenshot showed.
+- **Dark mode uses the palette exactly. Light mode cannot.** `#22d3ee` on white has a contrast of about 1.8, so light mode uses darker versions of the same hues (`#0e7490` to `#6d28d9`) on pale backgrounds.
+- **Checked.** Every text colour on every background is at least 4.5 (WCAG AA) in both modes, and `--on-fill` on both ends of the gradient. The lowest are 4.60 in dark mode (`--on-fill` on violet) and 4.74 in light mode (`--up` and `--accent`). The old light `--faint` was 4.41; it is 4.91 now. `--up`, `--down`, `--warn` and `--on-fill` are unchanged.

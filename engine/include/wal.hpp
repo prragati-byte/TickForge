@@ -3,7 +3,13 @@
 // File layout is described in docs/CONTRACTS.md, section 3.
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
+
+class UringWriter;
+
+// How the WAL reaches the kernel. Both give the same file and the same guarantee.
+enum class WalIo { Write, Uring };
 
 struct WalRecord {
   enum Type : uint8_t { NewOrder = 1, Cancel = 2 };
@@ -22,6 +28,14 @@ uint32_t crc32(const uint8_t *data, size_t len);
 // Turn a record into a full frame (len, crc, payload) and back.
 std::string wal_encode_frame(const WalRecord &r);
 
+// The CRC field of the frame for this record. Identical records give identical frames.
+uint32_t wal_frame_crc(const WalRecord &r);
+
+// Decode the frame at the start of `data`. Incomplete: more bytes are needed.
+// Corrupt: the bytes are there but wrong. On Ok, `frame_len` is the whole frame.
+enum class WalFrame { Ok, Incomplete, Corrupt };
+WalFrame wal_decode_frame(const void *data, size_t available, WalRecord &r, size_t &frame_len);
+
 struct WalRecovery {
   uint64_t records = 0;       // good frames replayed
   uint64_t last_seq = 0;      // seq of the last good frame, 0 if none
@@ -38,7 +52,9 @@ WalRecovery wal_recover(const std::string &path,
 // Appends frames to the end of the file. Not thread safe: callers lock.
 class WalWriter {
 public:
-  explicit WalWriter(const std::string &path); // file must exist (wal_recover first)
+  // The file must exist (wal_recover first). WalIo::Uring throws if this kernel
+  // cannot create a ring; see UringWriter::supported.
+  explicit WalWriter(const std::string &path, WalIo io = WalIo::Write);
   ~WalWriter();
   WalWriter(const WalWriter &) = delete;
   WalWriter &operator=(const WalWriter &) = delete;
@@ -49,4 +65,5 @@ public:
 
 private:
   int fd_;
+  std::unique_ptr<UringWriter> uring_; // only with WalIo::Uring
 };
