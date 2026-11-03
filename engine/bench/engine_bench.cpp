@@ -225,7 +225,7 @@ int main() {
   std::cout << "# Benchmark run\n\n";
   std::cout << "- CPU: " << cpu_model() << "\n";
   std::cout << "- Logical cores: " << std::thread::hardware_concurrency() << "\n";
-  std::cout << "- Compiler: g++/clang " << __VERSION__ << "\n";
+  std::cout << "- Compiler: " << __VERSION__ << "\n";
   std::cout << "- Flags: " << TF_BUILD_FLAGS << "\n";
   std::cout << "- Threads are not pinned to cores.\n\n";
   run_queue_benchmark();
