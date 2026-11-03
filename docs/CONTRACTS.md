@@ -84,6 +84,11 @@ Server: `engine_server --port 9100 --wal <file>` listens on `127.0.0.1`. Each me
 - `--no-pin`: leave placement to the scheduler.
 - `--pin-core N`: choose the matcher's core. A core this process may not use is a startup error (exit code 2).
 
+### Queue
+
+- `--queue lockfree` (default): the linked-list queue.
+- `--queue elastic`: a preallocated ring, with a heap list for what does not fit. `--ring-size N` (default 65536) is rounded up to a power of two. FIFO order and the state hash are the same as with the default. `stats` then also has `ring_capacity` and `ring_overflowed` (items that have ever taken the slow path).
+
 ### Rules
 
 - Price-time priority. A trade prints at the **resting** order's price. Partial fills leave the remainder resting.

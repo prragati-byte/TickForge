@@ -29,7 +29,6 @@ const STATE_TEXT: Record<EngineState, string> = {
 const PLANNED = [
   "Kernel bypass networking (AF_XDP)",
   "io_uring for storage I/O",
-  "Elastic dual ring buffer",
   "Multi-node replication",
 ];
 

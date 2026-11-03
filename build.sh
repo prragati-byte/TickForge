@@ -359,6 +359,12 @@ server_benchmarks() {
   echo
   "${sb[@]}" --conns 4 --orders 200000 --runs 7 --config "unpinned=--no-pin" --config "pinned=--pin"
   echo
+  echo "### Queue"
+  echo
+  "${sb[@]}" --conns 4 --orders 30000 --rate 2000 --runs 9 --config "lock-free list=--queue lockfree" --config "elastic ring=--queue elastic"
+  echo
+  "${sb[@]}" --conns 4 --orders 200000 --runs 5 --config "lock-free list=--queue lockfree" --config "elastic ring=--queue elastic"
+  echo
 }
 
 # ---- MySQL baseline -------------------------------------------------------------------------------

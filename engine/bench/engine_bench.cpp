@@ -4,12 +4,14 @@
 // 1. Queue: MPSCQueue (lock-free) vs std::mutex + std::deque, many producers
 //    and one consumer. Reports throughput (items handed over per second) and
 //    how long the producer spends inside enqueue() (P50 / P99).
+//    Then a burst: the consumer starts late, so the queue has to hold everything.
 // 2. Book: MapBook (std::map) vs DenseBook (array of cache-line levels), same
 //    stream of orders. Reports throughput and time per add() call (P50 / P99).
 //
 // Per-call times are taken with steady_clock around each call. That clock read
 // costs roughly 20-30 ns itself, so small numbers include that overhead.
 #include "dense_book.hpp"
+#include "elastic_ring.hpp"
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
 
@@ -99,6 +101,68 @@ template <class Q> QueueResult bench_queue(int producers, int per_producer) {
   return {total / secs / 1e6, percentile(all, 0.50), percentile(all, 0.99)};
 }
 
+// Four producers push `per_producer` items each while the consumer is held back
+// for `delay_ms`, then it drains. Shows what each queue does when a burst arrives.
+struct BurstResult {
+  int64_t enqueue_p50_ns, enqueue_p99_ns;
+  double drain_ms;
+};
+
+template <class Q> BurstResult bench_burst(int per_producer, int delay_ms, Q &q) {
+  const int producers = 4;
+  const uint64_t total = static_cast<uint64_t>(producers) * per_producer;
+  std::vector<std::vector<int64_t>> samples(producers);
+  for (auto &s : samples) s.resize(per_producer);
+  double drain_ms = 0;
+  std::thread consumer([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    auto t0 = Clock::now();
+    uint64_t got = 0, v;
+    while (got < total) {
+      if (q.dequeue(v)) got++;
+      else std::this_thread::yield();
+    }
+    drain_ms = ns_since(t0) / 1e6;
+  });
+  std::vector<std::thread> threads;
+  for (int p = 0; p < producers; p++)
+    threads.emplace_back([&, p] {
+      for (int i = 0; i < per_producer; i++) {
+        auto s = Clock::now();
+        q.enqueue(static_cast<uint64_t>(i));
+        samples[p][i] = ns_since(s);
+      }
+    });
+  for (auto &t : threads) t.join();
+  consumer.join();
+  std::vector<int64_t> all;
+  for (auto &s : samples) all.insert(all.end(), s.begin(), s.end());
+  return {percentile(all, 0.50), percentile(all, 0.99), drain_ms};
+}
+
+static void run_burst_benchmark() {
+  const int per_producer = 250000;
+  std::cout << "## Queue burst: consumer starts 20 ms late\n\n";
+  std::cout << "4 producers, " << per_producer << " items each. Elastic rings are sized so the burst "
+            << "fits (2^21 slots), half fits (2^18), or barely fits at all (2^8).\n\n";
+  std::cout << "| Queue | enqueue P50 (ns) | enqueue P99 (ns) | Drain (ms) | Items through overflow |\n";
+  std::cout << "|---|---|---|---|---|\n";
+  auto print = [](const std::string &name, const BurstResult &r, const std::string &overflow) {
+    std::cout << "| " << name << " | " << r.enqueue_p50_ns << " | " << r.enqueue_p99_ns << " | "
+              << fixed(r.drain_ms, 1) << " | " << overflow << " |\n";
+  };
+  {
+    MPSCQueue<uint64_t> q;
+    print("lock-free list", bench_burst(per_producer, 20, q), "every item is a heap node");
+  }
+  for (int bits : {21, 18, 8}) {
+    ElasticRing<uint64_t> q(size_t{1} << bits);
+    BurstResult r = bench_burst(per_producer, 20, q);
+    print("elastic ring 2^" + std::to_string(bits), r, std::to_string(q.overflowed_total()));
+  }
+  std::cout << "\n";
+}
+
 static void run_queue_benchmark() {
   const int per_producer = 200000;
   std::cout << "## Queue: lock-free vs mutex\n\n";
@@ -109,10 +173,13 @@ static void run_queue_benchmark() {
   for (int producers : {1, 2, 4, 8}) {
     QueueResult lf = bench_queue<MPSCQueue<uint64_t>>(producers, per_producer);
     QueueResult mx = bench_queue<MutexQueue>(producers, per_producer);
+    QueueResult el = bench_queue<ElasticRing<uint64_t>>(producers, per_producer);
     std::cout << "| lock-free | " << producers << " | " << fixed(lf.mops, 2) << " | " << lf.p50_ns
               << " | " << lf.p99_ns << " |\n";
     std::cout << "| mutex | " << producers << " | " << fixed(mx.mops, 2) << " | " << mx.p50_ns
               << " | " << mx.p99_ns << " |\n";
+    std::cout << "| elastic ring | " << producers << " | " << fixed(el.mops, 2) << " | " << el.p50_ns
+              << " | " << el.p99_ns << " |\n";
   }
   std::cout << "\n";
 }
@@ -229,6 +296,7 @@ int main() {
   std::cout << "- Flags: " << TF_BUILD_FLAGS << "\n";
   std::cout << "- Threads are not pinned to cores.\n\n";
   run_queue_benchmark();
+  run_burst_benchmark();
   run_book_benchmark();
   return 0;
 }

@@ -1,7 +1,7 @@
 // End-to-end test: start engine_server, talk to it over TCP, kill -9 it,
 // start it again on the same WAL and check that the state hash is identical.
 //
-//   engine_e2e_test <path to engine_server>
+//   engine_e2e_test <path to engine_server> [engine flags...]
 #include "json_lite.hpp"
 #include "test_util.hpp"
 
@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <vector>
 
 // ---- a tiny line-based TCP client ------------------------------------------
 
@@ -112,11 +113,17 @@ static std::string reason_of(const JsonObject &m) {
 
 // ---- server process ---------------------------------------------------------
 
+static std::vector<std::string> g_flags; // extra engine flags from the command line
+
 static pid_t start_server(const char *exe, int port, const std::string &wal) {
   pid_t pid = fork();
   if (pid == 0) {
-    std::string p = std::to_string(port);
-    execl(exe, exe, "--port", p.c_str(), "--wal", wal.c_str(), (char *)nullptr);
+    std::vector<std::string> args = {exe, "--port", std::to_string(port), "--wal", wal};
+    args.insert(args.end(), g_flags.begin(), g_flags.end());
+    std::vector<char *> argv;
+    for (auto &a : args) argv.push_back(&a[0]);
+    argv.push_back(nullptr);
+    execv(exe, argv.data());
     _exit(127);
   }
   return pid;
@@ -136,6 +143,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   const char *exe = argv[1];
+  g_flags.assign(argv + 2, argv + argc);
   char tmpl[] = "/tmp/tf_e2e_XXXXXX";
   std::string dir = mkdtemp(tmpl);
   std::string wal = dir + "/engine.wal";

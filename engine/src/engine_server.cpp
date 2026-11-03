@@ -2,6 +2,7 @@
 //
 //   engine_server --port 9100 --wal data/engine.wal [--max-qty 10000] [--band-pct 20]
 //                 [--pin | --no-pin] [--pin-core N]
+//                 [--queue lockfree|elastic] [--ring-size 65536]
 //
 // Protocol: one JSON object per line (see docs/CONTRACTS.md, section 2).
 //
@@ -14,6 +15,7 @@
 // The order books are MapBook (std::map). DenseBook is not used here because
 // it only accepts prices inside a fixed range.
 #include "affinity.hpp"
+#include "elastic_ring.hpp"
 #include "json_lite.hpp"
 #include "lock_free_queue.hpp"
 #include "map_book.hpp"
@@ -87,6 +89,8 @@ struct Options {
   int64_t band_pct = 20;
   bool pin = true;   // pin the matching thread to one core (--no-pin turns it off)
   int pin_core = -1; // -1: choose automatically
+  bool elastic_queue = false; // ElasticRing instead of MPSCQueue
+  size_t ring_size = 1 << 16;
 };
 
 // ---- small helpers ----------------------------------------------------------
@@ -166,6 +170,7 @@ class Server {
 public:
   explicit Server(const Options &opt, const tf_affinity::PinPlan &plan)
       : opt_(opt), plan_(plan), start_ns_(now_ns()), win_start_ns_(start_ns_) {
+    if (opt_.elastic_queue) ring_ = std::make_unique<ElasticRing<Job>>(opt_.ring_size);
     WalRecovery r = recover_exchange(opt_.wal_path, ex_);
     seq_ = r.last_seq;
     wal_ = std::make_unique<WalWriter>(opt_.wal_path);
@@ -454,7 +459,8 @@ private:
     job.pushed_ns = now_ns();
     if (job.kind == Job::NewOrder || job.kind == Job::Cancel)
       submitted_.fetch_add(1, std::memory_order_relaxed);
-    queue_.enqueue(job);
+    if (ring_) ring_->enqueue(job);
+    else queue_.enqueue(job);
     if (sleeping_.load()) {
       std::lock_guard<std::mutex> g(wake_mu_); // pairs with the matcher's wait
       wake_cv_.notify_one();
@@ -463,10 +469,12 @@ private:
 
   // ---- matching thread ----
 
+  bool next_job(Job &job) { return ring_ ? ring_->dequeue(job) : queue_.dequeue(job); }
+
   void matcher_loop() {
     Job job;
     for (;;) {
-      if (queue_.dequeue(job)) {
+      if (next_job(job)) {
         process(job);
         continue;
       }
@@ -474,7 +482,7 @@ private:
       // Queue is empty: sleep until a producer wakes us (or 10 ms pass).
       std::unique_lock<std::mutex> lk(wake_mu_);
       sleeping_.store(true);
-      if (queue_.dequeue(job)) { // something arrived just before we went to sleep
+      if (next_job(job)) { // something arrived just before we went to sleep
         sleeping_.store(false);
         lk.unlock();
         process(job);
@@ -595,7 +603,12 @@ private:
                   "\"state_hash\":\"%s\"}\n",
                   proc.threads, cpu_pct_, proc.rss_mb, (unsigned long long)ex_.last_seq(),
                   hash_hex(ex_.state_hash()).c_str());
-    return std::string(head) + "\"lat_hist\":" + hist + ",\"producers\":" + producers + tail;
+    // Only with --queue elastic, so the default reply is unchanged.
+    std::string ring_stats;
+    if (ring_)
+      ring_stats = ",\"ring_capacity\":" + std::to_string(ring_->capacity()) +
+                   ",\"ring_overflowed\":" + std::to_string(ring_->overflowed_total());
+    return std::string(head) + "\"lat_hist\":" + hist + ",\"producers\":" + producers + ring_stats + tail;
   }
 
   // ---- data ----
@@ -608,6 +621,7 @@ private:
   std::mutex ingress_mu_;
 
   MPSCQueue<Job> queue_;
+  std::unique_ptr<ElasticRing<Job>> ring_; // used instead of queue_ with --queue elastic
   std::mutex wake_mu_;
   std::condition_variable wake_cv_;
   std::atomic<bool> sleeping_{false};
@@ -651,7 +665,14 @@ static bool parse_args(int argc, char **argv, Options &opt) {
     else if (a == "--wal") opt.wal_path = v;
     else if (a == "--max-qty") opt.max_qty = std::atoll(v.c_str());
     else if (a == "--band-pct") opt.band_pct = std::atoll(v.c_str());
-    else if (a == "--pin-core") {
+    else if (a == "--queue") {
+      if (v != "lockfree" && v != "elastic") return false;
+      opt.elastic_queue = v == "elastic";
+    } else if (a == "--ring-size") {
+      long long n = std::atoll(v.c_str());
+      if (n < 2 || n > (1LL << 30)) return false;
+      opt.ring_size = static_cast<size_t>(n);
+    } else if (a == "--pin-core") {
       opt.pin = true;
       opt.pin_core = std::atoi(v.c_str());
     }
@@ -666,7 +687,8 @@ int main(int argc, char **argv) {
   if (!parse_args(argc, argv, opt)) {
     std::fprintf(stderr,
                  "usage: engine_server --wal <file> [--port 9100] [--max-qty 10000] "
-                 "[--band-pct 20] [--pin | --no-pin] [--pin-core N]\n");
+                 "[--band-pct 20] [--pin | --no-pin] [--pin-core N] "
+                 "[--queue lockfree|elastic] [--ring-size 65536]\n");
     return 2;
   }
   std::signal(SIGINT, on_signal);

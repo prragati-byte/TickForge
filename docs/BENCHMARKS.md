@@ -72,6 +72,54 @@ more than the matching thread can take.
 | unpinned | 15358 | 14654 to 15642 | 219.4 | 1009.9 | 1582.2 | 2381441.4 | 3930215.8 |
 | pinned | 15711 | 14736 to 15978 | 214.2 | 986.9 | 1493.1 | 2330488.2 | 3849743.9 |
 
+### Queue, whole server
+
+4 connections, 30000 orders per run, 9 runs per configuration, paced at 2000 orders/s in total.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| lock-free list | 2000 | 2000 to 2000 | 122.6 | 396.6 | 857.3 | 43.4 | 290.1 | 112 to 339 |
+| elastic ring | 2000 | 2000 to 2000 | 122.3 | 435.3 | 918.9 | 40.8 | 296.4 | 227 to 336 |
+
+4 connections, 200000 orders per run, 5 runs per configuration, closed loop, as fast as possible.
+
+| Configuration | Throughput (orders/s) | Range | RTT P50 (us) | RTT P99 (us) | RTT P99.9 (us) | Matcher P50 (us) | Matcher P99 (us) | Matcher P99 range |
+|---|---|---|---|---|---|---|---|---|
+| lock-free list | 18622 | 17479 to 18734 | 191.2 | 830.0 | 1272.7 | 2007207.7 | 3206254.1 | 2971686 to 3367006 |
+| elastic ring | 18451 | 17747 to 19120 | 192.4 | 788.6 | 1210.1 | 2002849.7 | 3139007.0 | 2742227 to 3322015 |
+
+### Queues alone, including the elastic ring
+
+### Queue: lock-free vs mutex
+
+Items per producer: 200000. One consumer thread. Latency is the time inside `enqueue()`.
+
+| Queue | Producers | Throughput (M items/s) | enqueue P50 (ns) | enqueue P99 (ns) |
+|---|---|---|---|---|
+| lock-free | 1 | 2.02 | 72 | 12901 |
+| mutex | 1 | 2.94 | 92 | 782 |
+| elastic ring | 1 | 13.29 | 29 | 100 |
+| lock-free | 2 | 4.05 | 60 | 1414 |
+| mutex | 2 | 6.01 | 40 | 2665 |
+| elastic ring | 2 | 15.30 | 110 | 170 |
+| lock-free | 4 | 3.57 | 458 | 4082 |
+| mutex | 4 | 5.15 | 42 | 20764 |
+| elastic ring | 4 | 19.84 | 155 | 347 |
+| lock-free | 8 | 2.54 | 1143 | 26950 |
+| mutex | 8 | 4.27 | 65 | 39992 |
+| elastic ring | 8 | 6.77 | 260 | 3132 |
+
+### Queue burst: consumer starts 20 ms late
+
+4 producers, 250000 items each. Elastic rings are sized so the burst fits (2^21 slots), half fits (2^18), or barely fits at all (2^8).
+
+| Queue | enqueue P50 (ns) | enqueue P99 (ns) | Drain (ms) | Items through overflow |
+|---|---|---|---|---|
+| lock-free list | 601 | 3838 | 279.9 | every item is a heap node |
+| elastic ring 2^21 | 145 | 255 | 29.4 | 0 |
+| elastic ring 2^18 | 176 | 534 | 82.1 | 620704 |
+| elastic ring 2^8 | 225 | 694 | 125.1 | 999744 |
+
 ## TickForge database vs MySQL
 
 Written by `./build.sh bench-mysql` (`bench/mysql_baseline/`). This compares a narrow job, storing fixed-schema trade records. It says nothing about general database quality: MySQL also provides SQL, secondary indexes, multi-row transactions, replication tooling and backups, and TickForge's database provides none of those.

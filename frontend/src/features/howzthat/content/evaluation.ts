@@ -47,8 +47,8 @@ export const EXPERIMENTS: Experiment[] = [
     metric: "Peak queue depth, time to drain, P99 during and after the burst.",
     procedure: "Inject bursts from all producers; sample queue depth and latency every few milliseconds.",
     interpretation: "Shows whether an unbounded queue hides overload (memory growth) instead of handling it.",
-    status: "not-measured",
-    needs: "A burst mode in the load generator.",
+    status: "first-run",
+    needs: "Measured for the queues alone (docs/BENCHMARKS.md). A burst mode in the whole-server load generator is still missing.",
   },
   {
     id: "pinning",
