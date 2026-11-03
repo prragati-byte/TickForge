@@ -46,7 +46,7 @@ Prices are integer cents everywhere except the screen. See [docs/ARCHITECTURE.md
 |---|---|---|
 | exchange-api: real buyer and seller per fill, integer-cent cash and P&L, live book, trade persistence, reconnect, REST and WebSockets | built, verified against a fake engine | `services/exchange-api/tests` (17 tests) |
 | market-data: cached, timeouts on every Yahoo call, Journey analytics | built, verified (no network in tests) | `services/market-data/tests` (19 tests) |
-| Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 24 unit tests for the telemetry parser, cent formatting and behavioural calculations |
+| Frontend: dashboard with live engine data, order ticket, market data, Journey, *How'z that!* | built, verified | typecheck, `vite build`, 26 tests: telemetry parser, cent formatting, behavioural calculations, page smoke test |
 | Behavioural features: daily vs long-term window, volatility-scaled axis, scenario preview before an order, return next to worst fall | built | calculations unit-tested; see below |
 | `build.sh` | built, verified with a stand-in engine and database | start, health waits, Ctrl+C cleanup, double run, `test`, `bench`, `clean` |
 | C++ engine, WAL and crash recovery, sanitizer-tested queue | built by Core, verified at integration | |

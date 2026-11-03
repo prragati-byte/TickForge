@@ -21,6 +21,6 @@ export default defineConfig({
     strictPort: true,
   },
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });
