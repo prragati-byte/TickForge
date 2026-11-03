@@ -1,2 +1,0 @@
-mod writer;
-pub use writer::Wal;

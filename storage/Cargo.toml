@@ -2,19 +2,20 @@
 name = "tickforge_db"
 version = "0.1.0"
 edition = "2021"
-crate-type = ["cdylib", "rlib"]
+description = "TickForge trade database: a small LSM tree with a Python binding"
 
 [lib]
 name = "tickforge_db"
 crate-type = ["cdylib", "rlib"]
 
-[dependencies]
-pyo3   = { version = "0.21", features = ["extension-module"] }
-serde  = { version = "1", features = ["derive"] }
-serde_json = "1"
+[features]
+# The Python binding. maturin turns this on (see pyproject.toml); plain
+# `cargo test` leaves it off, so tests do not need libpython.
+python = ["dep:pyo3"]
 
-[build-dependencies]
-cc = "1.0"
+[dependencies]
+crc32fast = "1.5"
+pyo3 = { version = "0.30", optional = true, features = ["extension-module"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27"

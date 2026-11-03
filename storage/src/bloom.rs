@@ -1,62 +1,62 @@
-// tickforge-db/src/bloom.rs
-// Simple Bloom filter for SSTable membership checks.
-// Uses k=3 independent hash functions over a fixed-size bit array.
-
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
-pub struct BloomFilter {
-    bits: Vec<u64>,  // 64-bit words
-    num_bits: usize,
-    k: usize,        // number of hash functions
+/// A Bloom filter on trade ids.
+/// `might_contain` is never wrong when it says "no", and wrong about 1% of the
+/// time when it says "yes" (10 bits per key, 7 hash functions).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bloom {
+    bits: Vec<u8>,
 }
 
-impl BloomFilter {
-    /// Create a Bloom filter sized for `capacity` items at `fp_rate` false-positive rate.
-    pub fn new(capacity: usize, fp_rate: f64) -> Self {
-        // m = -(n * ln(p)) / (ln 2)^2
-        let m = (-(capacity as f64 * fp_rate.ln()) / (2.0_f64.ln().powi(2))).ceil() as usize;
-        let m = m.max(64);
-        // k = (m/n) * ln 2
-        let k = ((m as f64 / capacity as f64) * 2.0_f64.ln()).round() as usize;
-        let k = k.clamp(1, 8);
-        let words = (m + 63) / 64;
-        BloomFilter {
-            bits: vec![0u64; words],
-            num_bits: words * 64,
-            k,
+const HASHES: u64 = 7;
+const BITS_PER_KEY: usize = 10;
+
+/// A good 64-bit mixing function (splitmix64).
+fn mix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+impl Bloom {
+    /// A filter sized for about `keys` entries.
+    pub fn with_capacity(keys: usize) -> Bloom {
+        let bits = (keys * BITS_PER_KEY).max(64);
+        Bloom {
+            bits: vec![0; bits.div_ceil(8)],
         }
     }
 
-    /// Insert a key into the filter.
-    pub fn insert<T: Hash>(&mut self, item: &T) {
-        for i in 0..self.k {
-            let idx = self.hash(item, i as u64) % self.num_bits;
-            self.bits[idx / 64] |= 1u64 << (idx % 64);
+    fn positions(&self, key: u64) -> impl Iterator<Item = usize> {
+        let total = (self.bits.len() * 8) as u64;
+        let h1 = mix(key);
+        let h2 = mix(h1) | 1;
+        (0..HASHES).map(move |i| (h1.wrapping_add(i.wrapping_mul(h2)) % total) as usize)
+    }
+
+    pub fn insert(&mut self, key: u64) {
+        for p in self.positions(key).collect::<Vec<_>>() {
+            self.bits[p / 8] |= 1 << (p % 8);
         }
     }
 
-    /// Test membership. May return true for non-members (false positive).
-    /// Never returns false for actual members.
-    pub fn may_contain<T: Hash>(&self, item: &T) -> bool {
-        for i in 0..self.k {
-            let idx = self.hash(item, i as u64) % self.num_bits;
-            if self.bits[idx / 64] & (1u64 << (idx % 64)) == 0 {
-                return false;
-            }
+    pub fn might_contain(&self, key: u64) -> bool {
+        self.positions(key)
+            .all(|p| self.bits[p / 8] & (1 << (p % 8)) != 0)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bits
+    }
+
+    /// None if `bytes` is empty (a filter always has at least one byte).
+    pub fn from_bytes(bytes: &[u8]) -> Option<Bloom> {
+        if bytes.is_empty() {
+            None
+        } else {
+            Some(Bloom {
+                bits: bytes.to_vec(),
+            })
         }
-        true
-    }
-
-    fn hash<T: Hash>(&self, item: &T, seed: u64) -> usize {
-        let mut hasher = DefaultHasher::new();
-        seed.hash(&mut hasher);
-        item.hash(&mut hasher);
-        hasher.finish() as usize
-    }
-
-    pub fn bit_count(&self) -> usize {
-        self.num_bits
     }
 }
 
@@ -66,25 +66,35 @@ mod tests {
 
     #[test]
     fn no_false_negatives() {
-        let mut bf = BloomFilter::new(1000, 0.01);
-        for i in 0u64..500 {
-            bf.insert(&i);
+        let mut b = Bloom::with_capacity(10_000);
+        for id in 0..10_000u64 {
+            b.insert(id * 7 + 1);
         }
-        for i in 0u64..500 {
-            assert!(bf.may_contain(&i), "False negative at {i}");
+        for id in 0..10_000u64 {
+            assert!(b.might_contain(id * 7 + 1));
         }
     }
 
     #[test]
-    fn false_positive_rate_low() {
-        let mut bf = BloomFilter::new(1000, 0.01);
-        for i in 0u64..1000 {
-            bf.insert(&i);
+    fn false_positive_rate_is_low() {
+        let mut b = Bloom::with_capacity(10_000);
+        for id in 0..10_000u64 {
+            b.insert(id);
         }
-        let fp_count = (1000u64..2000)
-            .filter(|x| bf.may_contain(x))
+        let false_hits = (1_000_000..1_020_000u64)
+            .filter(|&id| b.might_contain(id))
             .count();
-        // Allow up to 3× the target rate (~3%)
-        assert!(fp_count < 30, "Too many false positives: {fp_count}");
+        // about 1% expected; allow up to 3%
+        assert!(false_hits < 600, "false positives: {false_hits} of 20000");
+    }
+
+    #[test]
+    fn survives_bytes_round_trip() {
+        let mut b = Bloom::with_capacity(100);
+        b.insert(42);
+        let back = Bloom::from_bytes(b.as_bytes()).unwrap();
+        assert_eq!(back, b);
+        assert!(back.might_contain(42));
+        assert!(Bloom::from_bytes(&[]).is_none());
     }
 }
